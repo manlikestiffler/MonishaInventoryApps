@@ -1,0 +1,33 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="gradient1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4F46E5;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#7C3AED;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="gradient2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#06B6D4;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#3B82F6;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background Circle -->
+  <circle cx="256" cy="256" r="240" fill="url(#gradient1)" stroke="#FFFFFF" stroke-width="8"/>
+  
+  <!-- Main "M" Letter -->
+  <path d="M 140 180 L 140 360 L 170 360 L 170 240 L 220 320 L 250 320 L 300 240 L 300 360 L 330 360 L 330 180 L 290 180 L 235 280 L 180 180 Z" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="2"/>
+  
+  <!-- Inventory Box Icon -->
+  <rect x="340" y="200" width="40" height="40" fill="url(#gradient2)" rx="4" stroke="#FFFFFF" stroke-width="2"/>
+  <rect x="345" y="205" width="30" height="8" fill="#FFFFFF" opacity="0.8"/>
+  <rect x="345" y="218" width="20" height="6" fill="#FFFFFF" opacity="0.6"/>
+  <rect x="345" y="228" width="25" height="6" fill="#FFFFFF" opacity="0.6"/>
+  
+  <!-- Small Decorative Elements -->
+  <circle cx="380" cy="280" r="8" fill="#FFFFFF" opacity="0.3"/>
+  <circle cx="360" cy="300" r="6" fill="#FFFFFF" opacity="0.2"/>
+  <circle cx="400" cy="260" r="5" fill="#FFFFFF" opacity="0.25"/>
+  
+  <!-- Bottom Text Area -->
+  <text x="256" y="420" text-anchor="middle" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#FFFFFF">MONISHA</text>
+  <text x="256" y="450" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" fill="#E5E7EB">Inventory Management</text>
+</svg>

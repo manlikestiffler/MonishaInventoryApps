@@ -1,5 +1,5 @@
-import React from 'react';
-import { StatusBar } from 'expo-status-bar';
+import React, { useState, useEffect } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
 import { Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -8,11 +8,34 @@ import * as NavigationBar from 'expo-navigation-bar';
 import AppNavigator from './src/navigation/AppNavigator';
 import { ThemeProvider, useTheme } from './src/contexts/ThemeContext';
 import './global.css';
+import { auth } from './config/firebase';
+import { useAuthStore } from './configuration/authStore';
 
 function AppContent() {
   const { isDarkMode } = useTheme();
-  
-  // Set navigation bar color for Android
+  const { setUser, setUserRole, checkAndAssignSuperAdmin, isSuperAdmin } = useAuthStore();
+
+  // Set navigation bar color for Android and handle auth
+  React.useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      setUser(user);
+      
+      if (user) {
+        // Check and assign super admin role if applicable
+        await checkAndAssignSuperAdmin(user);
+        
+        // Default role if not super admin
+        if (!isSuperAdmin()) {
+          setUserRole('staff');
+        }
+      } else {
+        setUserRole(null);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [setUser, setUserRole, checkAndAssignSuperAdmin, isSuperAdmin]);
+
   React.useEffect(() => {
     if (Platform.OS === 'android') {
       // Force dark navigation bar regardless of theme for complete dark appearance

@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FiArrowLeft, FiUser, FiMail, FiShield, FiCalendar, FiEdit2, FiPhone, FiCreditCard, FiUpload } from 'react-icons/fi';
+import { FiArrowLeft, FiUser, FiMail, FiShield, FiCalendar, FiEdit2, FiPhone, FiCreditCard, FiUpload, FiTrash2, FiAlertTriangle } from 'react-icons/fi';
 import { useAuthStore } from '../stores/authStore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { auth } from '../config/firebase';
@@ -28,7 +28,7 @@ const LoadingButton = ({ isLoading, text, loadingText }) => (
 
 const ProfilePage = () => {
   const navigate = useNavigate();
-  const { user, userProfile, userRole, saveStaffProfile, saveManagerProfile, fetchUserProfile } = useAuthStore();
+  const { user, userProfile, userRole, saveStaffProfile, saveManagerProfile, fetchUserProfile, deleteUserAccount } = useAuthStore();
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState({
     photoURL: userProfile?.photoURL || '',
@@ -41,6 +41,9 @@ const ProfilePage = () => {
   const [message, setMessage] = useState({ type: '', text: '' });
   const [uploadProgress, setUploadProgress] = useState(0);
   const fileInputRef = useRef(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Fetch user profile on component mount and when user changes
   React.useEffect(() => {
@@ -184,6 +187,27 @@ const ProfilePage = () => {
       setMessage({ type: 'error', text: 'Failed to update profile. Please try again.' });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!deletePassword.trim()) {
+      setMessage({ type: 'error', text: 'Please enter your password to confirm account deletion.' });
+      return;
+    }
+
+    setIsDeleting(true);
+    setMessage({ type: '', text: '' });
+
+    try {
+      await deleteUserAccount(deletePassword);
+      // User will be automatically signed out and redirected
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message });
+    } finally {
+      setIsDeleting(false);
+      setShowDeleteModal(false);
+      setDeletePassword('');
     }
   };
 
@@ -404,12 +428,112 @@ const ProfilePage = () => {
                       value={formatDate(user?.metadata?.lastSignInTime)}
                     />
                   </div>
+
+                  {/* Delete Account Section */}
+                  <div className="mt-8 pt-8 border-t border-gray-200 dark:border-gray-700">
+                    <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-6 border border-red-200 dark:border-red-800">
+                      <div className="flex flex-col items-center text-center gap-4">
+                        <div className="flex-shrink-0">
+                          <FiAlertTriangle className="w-8 h-8 text-red-600 dark:text-red-400" />
+                        </div>
+                        <div>
+                          <h3 className="text-lg font-semibold text-red-900 dark:text-red-100 mb-2">
+                            Danger Zone
+                          </h3>
+                          <p className="text-sm text-red-700 dark:text-red-300 mb-4 max-w-2xl">
+                            Once you delete your account, there is no going back. This action cannot be undone and will permanently delete your account and all associated data.
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => setShowDeleteModal(true)}
+                          className="flex items-center justify-center gap-2 px-6 py-3 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-colors shadow-sm"
+                        >
+                          <FiTrash2 className="w-4 h-4" />
+                          Delete Account
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
           </div>
         </div>
       </div>
+
+      {/* Delete Account Modal */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-md w-full p-6"
+          >
+            <div className="flex items-center gap-3 mb-4">
+              <div className="flex-shrink-0 w-10 h-10 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center">
+                <FiAlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                  Delete Account
+                </h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  This action cannot be undone
+                </p>
+              </div>
+            </div>
+
+            <div className="mb-6">
+              <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
+                Are you sure you want to delete your account? This will permanently remove all your data and cannot be reversed.
+              </p>
+              <p className="text-sm font-medium text-gray-700 dark:text-gray-200 mb-2">
+                Please enter your password to confirm:
+              </p>
+              <input
+                type="password"
+                value={deletePassword}
+                onChange={(e) => setDeletePassword(e.target.value)}
+                placeholder="Enter your password"
+                className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-gray-200 focus:ring-red-500 focus:border-red-500"
+                disabled={isDeleting}
+              />
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowDeleteModal(false);
+                  setDeletePassword('');
+                  setMessage({ type: '', text: '' });
+                }}
+                disabled={isDeleting}
+                className="flex-1 px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 font-medium rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteAccount}
+                disabled={isDeleting || !deletePassword.trim()}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isDeleting ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-t-transparent border-white rounded-full animate-spin"></div>
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <FiTrash2 className="w-4 h-4" />
+                    <span>Delete Account</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 };

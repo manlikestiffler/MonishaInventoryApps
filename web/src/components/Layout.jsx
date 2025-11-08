@@ -6,6 +6,7 @@ import { useAuthStore } from '../stores/authStore';
 import { useTheme } from './ThemeProvider';
 import Logo from '../components/Logo';
 import MobileMenu from './navigation/MobileMenu';
+import NotificationBell from './notifications/NotificationBell';
 import {
   DashboardIcon,
   InventoryIcon,
@@ -16,7 +17,7 @@ import {
   NotificationIcon,
   MenuIcon
 } from './icons';
-import { FiUsers, FiUser, FiSettings, FiLogOut, FiTrash2, FiShield, FiChevronDown, FiSun, FiMoon, FiAlertTriangle } from 'react-icons/fi';
+import { FiUsers, FiUser, FiLogOut, FiTrash2, FiShield, FiChevronDown, FiSun, FiMoon, FiAlertTriangle } from 'react-icons/fi';
 
 const Layout = ({ children }) => {
   const [isScrolled, setIsScrolled] = useState(false);
@@ -155,6 +156,9 @@ const Layout = ({ children }) => {
 
             {/* Right side controls */}
             <div className="flex items-center space-x-4">
+              {/* Notification Bell */}
+              <NotificationBell />
+              
               <button
                 onClick={toggleTheme}
                 className="p-2 rounded-full text-muted-foreground hover:text-foreground hover:bg-accent focus:outline-none"
@@ -164,10 +168,6 @@ const Layout = ({ children }) => {
                 {theme === 'light' ? <FiMoon className="w-5 h-5" /> : <FiSun className="w-5 h-5" />}
               </button>
 
-              <button className="p-1 rounded-full text-muted-foreground hover:text-foreground focus:outline-none">
-                <span className="sr-only">View notifications</span>
-                <NotificationIcon />
-              </button>
 
               {/* Profile dropdown */}
               <div className="relative">
@@ -280,10 +280,6 @@ const Layout = ({ children }) => {
                             <span className="text-foreground">Super Admin Dashboard</span>
                           </DropdownMenuItem>
                         )}
-                        <DropdownMenuItem onSelect={() => { navigate('/settings'); setIsProfileOpen(false); }}>
-                          <FiSettings className="h-4 w-4 mr-3 text-muted-foreground" />
-                          <span className="text-foreground">Settings</span>
-                        </DropdownMenuItem>
                       </div>
 
                       {/* Divider */}

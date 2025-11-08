@@ -207,7 +207,13 @@ export default function CreateBatchScreen({ navigation }) {
       createdByRole: userRole,
     };
 
-    addBatch(batchData);
+    const userInfo = {
+      id: user?.uid,
+      name: user?.displayName,
+      fullName: user?.displayName,
+      email: user?.email
+    };
+    addBatch(batchData, userInfo);
     Alert.alert('Success', 'Batch created successfully!', [
       { text: 'OK', onPress: () => navigation.goBack() },
     ]);

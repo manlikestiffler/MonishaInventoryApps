@@ -11,13 +11,18 @@ import { Input } from '../components/ui/Input';
 import { AnimatedCard } from '../components/ui/AnimatedCard';
 import { GlassCard } from '../components/ui/GlassCard';
 import FloatingActionButton from '../components/ui/FloatingActionButton';
+import ReorderModal from '../components/ReorderModal';
+import InventoryStatsCards from '../components/InventoryStatsCards';
+import InventoryStatsModal from '../components/InventoryStatsModal';
 import { useInventoryStore } from '../../configuration/inventoryStore';
+import { useAuthStore } from '../../configuration/authStore';
 import { getUniformById, getVariantById, getTotalStockForVariant } from '../utils/staticData';
 
 export default function ProductScreen({ navigation }) {
   const { isDarkMode } = useTheme();
   const colors = getColors(isDarkMode);
   const { products, loading, setupRealtimeListeners, cleanup } = useInventoryStore();
+  const { user } = useAuthStore();
   const [selectedUniformType, setSelectedUniformType] = useState('all');
   const [selectedVariant, setSelectedVariant] = useState('all');
   const [selectedSchool, setSelectedSchool] = useState('all');
@@ -26,6 +31,10 @@ export default function ProductScreen({ navigation }) {
   const [showVariantModal, setShowVariantModal] = useState(false);
   const [showSchoolModal, setShowSchoolModal] = useState(false);
   const [showColorModal, setShowColorModal] = useState(false);
+  const [showReceiveModal, setShowReceiveModal] = useState(false);
+  const [receiveModalData, setReceiveModalData] = useState(null);
+  const [showStatsModal, setShowStatsModal] = useState(false);
+  const [statsModalData, setStatsModalData] = useState({ title: '', products: [], type: 'all' });
   
   const fadeAnim = React.useRef(new Animated.Value(0)).current;
 
@@ -42,6 +51,41 @@ export default function ProductScreen({ navigation }) {
       cleanup();
     };
   }, []);
+
+  const handleReceiveStock = (product, variant, size) => {
+    setReceiveModalData({ product, variant, size });
+    setShowReceiveModal(true);
+  };
+
+  const handleStatsCardPress = (title, products, type) => {
+    setStatsModalData({ title, products, type });
+    setShowStatsModal(true);
+  };
+
+  const handleReceive = (product) => {
+    // Open receive modal with product data
+    // Get the first variant and first size for initial display
+    if (product.variants && product.variants.length > 0) {
+      const firstVariant = product.variants[0];
+      const firstSize = firstVariant.sizes && firstVariant.sizes.length > 0 ? firstVariant.sizes[0] : null;
+      
+      if (firstSize) {
+        setReceiveModalData({
+          product: product,
+          variant: {
+            id: firstVariant.id || `${product.id}-${firstVariant.variantType}`,
+            color: firstVariant.color,
+            variantType: firstVariant.variantType
+          },
+          size: firstSize.size,
+          currentStock: firstSize.quantity || 0,
+          reorderLevel: firstSize.reorderLevel || firstVariant.defaultReorderLevel || 5,
+          batchId: firstVariant.batchId || product.batchId
+        });
+        setShowReceiveModal(true);
+      }
+    }
+  };
 
   // Extract unique values from database
   const getUniqueUniformTypes = () => {
@@ -171,6 +215,41 @@ export default function ProductScreen({ navigation }) {
                 fontWeight: '400'
               }}>
                 Manage your uniform inventory
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Inventory Stats Cards */}
+        <InventoryStatsCards 
+          products={filteredProducts} 
+          onCardPress={handleStatsCardPress}
+        />
+
+        <View style={{
+          backgroundColor: colors.background,
+          borderTopLeftRadius: 24,
+          borderTopRightRadius: 24,
+          marginTop: -12,
+          paddingTop: 24,
+          flex: 1
+        }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 16 }}>
+            <View style={{ flex: 1 }}>
+              <Text style={{
+                fontSize: 20,
+                fontWeight: '700',
+                color: colors.text,
+                marginBottom: 2
+              }}>
+                All Products
+              </Text>
+              <Text style={{
+                fontSize: 14,
+                color: colors.textSecondary,
+                fontWeight: '400'
+              }}>
+                {filteredProducts.length} products found
               </Text>
             </View>
             
@@ -660,15 +739,7 @@ export default function ProductScreen({ navigation }) {
                       <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                         <Text style={{ fontSize: 14, color: colors.mutedForeground, fontWeight: '500' }}>Price</Text>
                         <Text style={{ fontSize: 16, color: colors.cardForeground, fontWeight: '800' }}>
-                          ${(() => {
-                            // Debug: Log product structure
-                            console.log('Product Price Debug:', {
-                              name: product.name,
-                              price: product.price,
-                              variants: product.variants,
-                              variantCount: product.variants?.length
-                            });
-                            
+${(() => {
                             // Check variants for price (primary source in Firebase)
                             if (product.variants && product.variants.length > 0) {
                               // Get all unique prices from variants and their sizes
@@ -690,8 +761,6 @@ export default function ProductScreen({ navigation }) {
                                 }
                               });
                               
-                              console.log('All found prices:', prices);
-                              
                               if (prices.length > 0) {
                                 const minPrice = Math.min(...prices);
                                 const maxPrice = Math.max(...prices);
@@ -707,28 +776,51 @@ export default function ProductScreen({ navigation }) {
                             if (product.price && parseFloat(product.price) > 0) return parseFloat(product.price).toFixed(2);
                             if (product.basePrice && parseFloat(product.basePrice) > 0) return parseFloat(product.basePrice).toFixed(2);
                             if (product.unitPrice && parseFloat(product.unitPrice) > 0) return parseFloat(product.unitPrice).toFixed(2);
-                            console.log('No valid price found, returning 0.00');
                             return '0.00';
                           })()}
                         </Text>
                       </View>
                     </View>
                     
-                    {/* Action Button */}
-                    <TouchableOpacity
-                      onPress={() => navigation?.navigate('ProductDetails', { productId: product.id }) || console.log('Navigate to Product Details:', product.id)}
-                    >
-                      <View
-                        style={{
-                          borderRadius: 12,
-                          paddingVertical: 8,
-                          paddingHorizontal: 16,
-                          backgroundColor: colors.primary
-                        }}
+                    {/* Action Buttons */}
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <TouchableOpacity
+                        onPress={() => navigation?.navigate('ProductDetails', { productId: product.id }) || console.log('Navigate to Product Details:', product.id)}
                       >
-                        <Text style={{ color: colors.primaryForeground, fontSize: 14, fontWeight: '600' }}>View Details</Text>
-                      </View>
-                    </TouchableOpacity>
+                        <View
+                          style={{
+                            borderRadius: 12,
+                            paddingVertical: 8,
+                            paddingHorizontal: 16,
+                            backgroundColor: colors.primary
+                          }}
+                        >
+                          <Text style={{ color: colors.primaryForeground, fontSize: 14, fontWeight: '600' }}>View Details</Text>
+                        </View>
+                      </TouchableOpacity>
+                      
+                      {/* Receive Stock Button - Only show for managers */}
+                      {user?.role === 'manager' && (
+                        <TouchableOpacity
+                          onPress={() => handleReceive(product)}
+                        >
+                          <View
+                            style={{
+                              borderRadius: 12,
+                              paddingVertical: 8,
+                              paddingHorizontal: 12,
+                              backgroundColor: colors.success || '#22c55e',
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              gap: 4
+                            }}
+                          >
+                            <Ionicons name="add" size={16} color="white" />
+                            <Text style={{ color: 'white', fontSize: 14, fontWeight: '600' }}>Receive</Text>
+                          </View>
+                        </TouchableOpacity>
+                      )}
+                    </View>
                   </View>
                 </View>
               </TouchableOpacity>
@@ -932,6 +1024,27 @@ export default function ProductScreen({ navigation }) {
           </View>
         </View>
       </Modal>
+
+      {/* Receive Stock Modal */}
+      <ReorderModal
+        visible={showReceiveModal}
+        onClose={() => setShowReceiveModal(false)}
+        product={receiveModalData?.product}
+        variant={receiveModalData?.variant}
+        size={receiveModalData?.size}
+      />
+
+      {/* Inventory Stats Modal */}
+      <InventoryStatsModal
+        visible={showStatsModal}
+        onClose={() => setShowStatsModal(false)}
+        title={statsModalData.title}
+        products={statsModalData.products}
+        type={statsModalData.type}
+        currentStock={receiveModalData?.currentStock}
+        reorderLevel={receiveModalData?.reorderLevel}
+        batchId={receiveModalData?.batchId}
+      />
     </View>
   );
 }

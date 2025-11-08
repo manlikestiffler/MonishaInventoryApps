@@ -4,7 +4,7 @@
     "slug": "MonishaInventoryApp",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/monisha-logo.png",
     "scheme": "monishainventoryapp",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -25,7 +25,8 @@
         "backgroundColor": "#000000",
         "barStyle": "light-content",
         "translucent": false
-      }
+      },
+      "package": "com.manslikestiffler.MonishaInventoryApp"
     },
     "web": {
       "bundler": "metro",
@@ -46,6 +47,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "9090cae7-2ef6-4368-bf36-702d0f021b9a"
+      }
     }
   }
 }

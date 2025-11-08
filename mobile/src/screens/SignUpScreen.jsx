@@ -105,17 +105,30 @@ const SignUpScreen = ({ navigation }) => {
         appOrigin: 'inventory'
       };
       
-      // If this is the first user and it matches superuser email, make them a manager
+      // Only tinashegomo96@gmail.com should be super admin (permanent hardcoded)
       const SUPER_ADMIN_EMAIL = 'tinashegomo96@gmail.com';
+      const isPermanentSuperAdmin = (email) => {
+        return email?.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase();
+      };
       
-      if (firstUser || user.email === SUPER_ADMIN_EMAIL) {
-        // First user or superuser is automatically a manager
-        await saveManagerProfile(user.uid, profileData);
-        setSuccessMessage('Account created! Please check your email to verify your account. You are registered as a manager.');
+      if (isPermanentSuperAdmin(user.email)) {
+        // Super admin user gets manager profile with super_admin role
+        const managerData = {
+          ...profileData,
+          role: 'super_admin',
+          isActive: true
+        };
+        await saveManagerProfile(user.uid, managerData);
+        setSuccessMessage('Super admin account created! Please check your email to verify your account.');
       } else {
-        // All other users are registered as staff
-        await saveStaffProfile(user.uid, profileData);
-        setSuccessMessage('Account created! Please check your email to verify your account. You are registered as staff.');
+        // All other users are registered as staff (including first user if not super admin)
+        const staffData = {
+          ...profileData,
+          role: 'staff',
+          isActive: true
+        };
+        await saveStaffProfile(user.uid, staffData);
+        setSuccessMessage('Account created! Please check your email to verify your account.');
       }
       
       // Set the user in the global state
@@ -194,13 +207,6 @@ const SignUpScreen = ({ navigation }) => {
                 Join Monisha Inventory Management System
               </Text>
               
-              {firstUser && (
-                <View className="mt-4 bg-red-900/30 border border-red-500/30 rounded-xl p-3">
-                  <Text className="text-red-400 text-sm text-center">
-                    You are the first user! You will be registered as a manager.
-                  </Text>
-                </View>
-              )}
             </View>
 
             {/* Error Message */}
@@ -330,13 +336,11 @@ const SignUpScreen = ({ navigation }) => {
               </View>
 
               {/* Staff Notice */}
-              {!firstUser && (
-                <View className="bg-gray-800/30 border border-gray-600/30 rounded-xl p-3 mt-4">
-                  <Text className="text-gray-400 text-sm text-center">
-                    You are signing up as a staff member. Only authorized administrators can grant manager access.
-                  </Text>
-                </View>
-              )}
+              <View className="bg-gray-800/30 border border-gray-600/30 rounded-xl p-3 mt-4">
+                <Text className="text-gray-400 text-sm text-center">
+                  You are signing up as a staff member. Only authorized administrators can grant manager access.
+                </Text>
+              </View>
 
               {/* Create Account Button */}
               <TouchableOpacity

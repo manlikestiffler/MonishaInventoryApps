@@ -3,6 +3,8 @@ import { View, Text, ScrollView, TouchableOpacity, StatusBar, Animated } from 'r
 import { getColors } from '../constants/colors';
 import { useTheme } from '../contexts/ThemeContext';
 import { useBatchStore } from '../../configuration/batchStore';
+import { collection, getDocs, query, orderBy, onSnapshot, where } from 'firebase/firestore';
+import { db } from '../../config/firebase';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import FloatingActionButton from '../components/ui/FloatingActionButton';
 import { formatDate } from '../utils/dateUtils'; 
@@ -29,6 +31,8 @@ export default function BatchScreen({ navigation }) {
   } = useBatchStore();
   const [selectedBatch, setSelectedBatch] = useState(null);
   // Removed modal state - using navigation instead
+  const [analytics, setAnalytics] = useState({ totalBatches: 0, totalValue: 0, totalItems: 0 });
+  const [creatorNames, setCreatorNames] = useState({});
   const [newBatch, setNewBatch] = useState({
     name: '',
     type: '',
@@ -55,6 +59,44 @@ export default function BatchScreen({ navigation }) {
   
   const fadeAnim = React.useRef(new Animated.Value(0)).current;
 
+  // Fetch creator names from user profiles
+  const fetchCreatorNames = async (emails) => {
+    const namesMap = {};
+    const emailsToFetch = emails.filter(email => email && !creatorNames[email]);
+    
+    if (emailsToFetch.length === 0) return;
+    
+    try {
+      const fetchNames = async (emails, collectionName) => {
+        const fetchedNames = {};
+        const profilesRef = collection(db, collectionName);
+        const chunks = [];
+        for (let i = 0; i < emails.length; i += 30) {
+          chunks.push(emails.slice(i, i + 30));
+        }
+        for (const chunk of chunks) {
+          const userQuery = query(profilesRef, where('email', 'in', chunk));
+          const querySnapshot = await getDocs(userQuery);
+          querySnapshot.forEach(doc => {
+            const profile = doc.data();
+            const fullName = `${profile.firstName || ''} ${profile.lastName || ''}`.trim();
+            if (profile.email) {
+              fetchedNames[profile.email] = fullName || profile.displayName || profile.email;
+            }
+          });
+        }
+        return fetchedNames;
+      };
+
+      const staffNames = await fetchNames(emailsToFetch, 'inventory_staff');
+      const managerNames = await fetchNames(emailsToFetch, 'inventory_managers');
+      
+      setCreatorNames(prev => ({ ...prev, ...staffNames, ...managerNames }));
+    } catch (error) {
+      console.error('Error fetching creator names:', error);
+    }
+  };
+
   // Initialize real-time batch synchronization
   React.useEffect(() => {
     const unsubscribe = subscribeToAllBatches();
@@ -73,6 +115,16 @@ export default function BatchScreen({ navigation }) {
       unsubscribeFromBatches();
     };
   }, []);
+
+  // Fetch creator names when batches change
+  React.useEffect(() => {
+    if (batches.length > 0) {
+      const creatorEmails = [...new Set(batches.map(b => b.createdBy).filter(Boolean))];
+      if (creatorEmails.length > 0) {
+        fetchCreatorNames(creatorEmails);
+      }
+    }
+  }, [batches]);
 
   // Handle errors
   React.useEffect(() => {
@@ -543,7 +595,7 @@ export default function BatchScreen({ navigation }) {
                           <Ionicons name="cube-outline" size={12} color={colors.mutedForeground} />
                         </View>
                         <Text style={{ fontSize: 12, color: colors.mutedForeground, fontWeight: '500', flex: 1 }} numberOfLines={1}>
-                          {batch.createdBy || 'Unknown Creator'}
+                          {creatorNames[batch.createdBy] || batch.createdBy || 'Unknown Creator'}
                         </Text>
                       </View>
                     </View>

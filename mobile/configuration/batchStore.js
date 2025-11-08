@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { collection, addDoc, getDocs, doc, getDoc, deleteDoc, updateDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { db } from '../config/firebase';
+import { useNotificationStore } from './notificationStore';
 
 // Real data structure matches Firestore batchInventory collection
 // Sample structure:
@@ -27,13 +28,19 @@ export const useBatchStore = create((set, get) => ({
   // Real-time batch synchronization
   subscribeToAllBatches: () => {
     try {
+      // Clean up any existing subscription first
+      const currentState = get();
+      if (currentState.unsubscribe) {
+        currentState.unsubscribe();
+      }
+
       const batchesRef = collection(db, 'batchInventory');
       const q = query(batchesRef, orderBy('createdAt', 'desc'));
       
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const batchesData = snapshot.docs.map(doc => ({
-          id: doc.id,
           ...doc.data(),
+          id: doc.id, // Must come AFTER spread to overwrite any local id field
           createdAt: doc.data().createdAt?.toDate(),
           updatedAt: doc.data().updatedAt?.toDate()
         }));
@@ -60,23 +67,9 @@ export const useBatchStore = create((set, get) => ({
     }
   },
 
-  fetchBatches: async () => {
-    set({ loading: true });
-    try {
-      const batchesRef = collection(db, 'batchInventory');
-      const q = query(batchesRef, orderBy('createdAt', 'desc'));
-      const batchesSnapshot = await getDocs(q);
-      const batchesData = batchesSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        createdAt: doc.data().createdAt?.toDate(),
-        updatedAt: doc.data().updatedAt?.toDate()
-      }));
-      set({ batches: batchesData, loading: false });
-    } catch (error) {
-      console.error('Error fetching batches:', error);
-      set({ error: error.message, loading: false });
-    }
+  fetchBatches: () => {
+    // Use the real-time subscription to fetch and sync batches
+    return get().subscribeToAllBatches();
   },
 
   getBatch: async (id) => {
@@ -85,8 +78,8 @@ export const useBatchStore = create((set, get) => ({
       if (batchDoc.exists()) {
         const data = batchDoc.data();
         return { 
-          id: batchDoc.id, 
           ...data,
+          id: batchDoc.id, // Must come AFTER spread to overwrite any local id field
           createdAt: data.createdAt?.toDate(),
           updatedAt: data.updatedAt?.toDate()
         };
@@ -104,8 +97,8 @@ export const useBatchStore = create((set, get) => ({
       if (doc.exists()) {
         const data = doc.data();
         callback({ 
-          id: doc.id, 
           ...data,
+          id: doc.id, // Must come AFTER spread to overwrite any local id field
           createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
           updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt
         });
@@ -119,28 +112,31 @@ export const useBatchStore = create((set, get) => ({
     return unsubscribe;
   },
 
-  addBatch: async (batch) => {
+  addBatch: async (batch, userInfo) => {
     try {
-      // Add to Firebase
+      // Add to Firebase - real-time subscription will automatically update state
       const docRef = await addDoc(collection(db, 'batchInventory'), {
         ...batch,
         createdAt: new Date(),
         updatedAt: new Date()
       });
       
-      // Update local state
-      const newBatch = {
+      // Create notification with user info
+      const notificationStore = useNotificationStore.getState();
+      notificationStore.createBatchNotification(
+        batch.name,
+        batch.items?.length || 0,
+        userInfo
+      );
+      
+      // Return the new batch info without manually updating state
+      // The real-time subscription will handle the state update
+      return {
         id: docRef.id,
         ...batch,
         createdAt: new Date(),
         updatedAt: new Date()
       };
-      
-      set((state) => ({
-        batches: [...state.batches, newBatch]
-      }));
-      
-      return newBatch;
     } catch (error) {
       console.error('Error adding batch:', error);
       throw error;
@@ -154,27 +150,34 @@ export const useBatchStore = create((set, get) => ({
         ...data,
         updatedAt: new Date()
       });
-
-      set((state) => ({
-        batches: state.batches.map((b) =>
-          b.id === id ? { ...b, ...data, updatedAt: new Date() } : b
-        )
-      }));
+      // Real-time subscription will handle state update
     } catch (error) {
       console.error('Error updating batch:', error);
       throw error;
     }
   },
 
-  deleteBatch: async (id) => {
+  deleteBatch: async (id, userInfo) => {
     try {
-      // Delete from Firebase
+      // Get batch info before deletion for notification
+      const batchDoc = await getDoc(doc(db, 'batchInventory', id));
+      const batchData = batchDoc.exists() ? batchDoc.data() : null;
+      
+      // Delete from Firebase - real-time subscription will update state
       await deleteDoc(doc(db, 'batchInventory', id));
       
-      // Update local state
-      set((state) => ({
-        batches: state.batches.filter((batch) => batch.id !== id)
-      }));
+      // Create deletion notification with user info
+      if (batchData && userInfo) {
+        const notificationStore = useNotificationStore.getState();
+        notificationStore.addNotification({
+          type: 'batch_deleted',
+          title: 'Batch Deleted',
+          message: `Batch "${batchData.name}" has been deleted`,
+          category: 'inventory',
+          priority: 'medium',
+          icon: '🗑️'
+        }, userInfo);
+      }
       
       return true;
     } catch (error) {
@@ -190,13 +193,7 @@ export const useBatchStore = create((set, get) => ({
         status,
         updatedAt: new Date()
       });
-
-      set((state) => ({
-        batches: state.batches.map((b) =>
-          b.id === id ? { ...b, status, updatedAt: new Date() } : b
-        )
-      }));
-      
+      // Real-time subscription will handle state update
       return { id, status, updatedAt: new Date() };
     } catch (error) {
       console.error('Error updating batch status:', error);

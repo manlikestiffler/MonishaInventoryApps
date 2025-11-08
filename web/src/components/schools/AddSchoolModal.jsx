@@ -3,9 +3,12 @@ import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
 import { useSchoolStore } from '../../stores/schoolStore';
+import useNotificationStore from '../../stores/notificationStore';
+import { useAuthStore } from '../../stores/authStore';
 
 const AddSchoolModal = ({ isOpen, onClose }) => {
   const { addSchool } = useSchoolStore();
+  const { createSchoolNotification } = useNotificationStore();
   const [schoolName, setSchoolName] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -24,7 +27,18 @@ const AddSchoolModal = ({ isOpen, onClose }) => {
         updatedAt: new Date().toISOString()
       };
       
-      await addSchool(schoolData);
+      const { user, userProfile } = useAuthStore.getState();
+      const userInfo = {
+        id: user?.uid,
+        name: userProfile?.displayName || user?.displayName,
+        fullName: userProfile?.displayName || user?.displayName,
+        email: user?.email
+      };
+      
+      await addSchool(schoolData, userInfo);
+      
+      // Create notification for new school addition
+      createSchoolNotification(schoolName.trim());
       
       // Reset form and close modal
       setSchoolName('');

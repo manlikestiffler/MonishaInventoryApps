@@ -1,6 +1,7 @@
 import { create } from 'zustand';
-import { collection, addDoc, getDocs, doc, getDoc, deleteDoc, updateDoc, onSnapshot } from 'firebase/firestore';
+import { collection, getDocs, addDoc, deleteDoc, doc, query, orderBy, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { db } from '../config/firebase';
+import useNotificationStore from './notificationStore';
 import mockApi from '../services/mockApi.js';
 
 // Add batch data to mockApi.js
@@ -39,8 +40,8 @@ export const useBatchStore = create((set, get) => ({
     try {
       const batchesSnapshot = await getDocs(collection(db, 'batchInventory'));
       const batchesData = batchesSnapshot.docs.map(doc => ({
-        id: doc.id,
         ...doc.data(),
+        id: doc.id, // Must come AFTER spread to overwrite any local id field
         createdAt: doc.data().createdAt?.toDate(),
         updatedAt: doc.data().updatedAt?.toDate()
       }));
@@ -57,8 +58,8 @@ export const useBatchStore = create((set, get) => ({
       if (batchDoc.exists()) {
         const data = batchDoc.data();
         return { 
-          id: batchDoc.id, 
           ...data,
+          id: batchDoc.id, // Must come AFTER spread to overwrite any local id field
           createdAt: data.createdAt?.toDate(),
           updatedAt: data.updatedAt?.toDate()
         };
@@ -76,8 +77,8 @@ export const useBatchStore = create((set, get) => ({
       if (doc.exists()) {
         const data = doc.data();
         callback({ 
-          id: doc.id, 
           ...data,
+          id: doc.id, // Must come AFTER spread to overwrite any local id field
           createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
           updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt
         });
@@ -91,7 +92,7 @@ export const useBatchStore = create((set, get) => ({
     return unsubscribe;
   },
 
-  addBatch: async (batch) => {
+  addBatch: async (batch, userInfo) => {
     try {
       // Add to Firebase
       const docRef = await addDoc(collection(db, 'batchInventory'), {
@@ -111,6 +112,18 @@ export const useBatchStore = create((set, get) => ({
       set((state) => ({
         batches: [...state.batches, newBatch]
       }));
+
+      // Create notification for batch creation
+      const { addNotification } = useNotificationStore.getState();
+      const itemCount = batch.items?.reduce((sum, item) => sum + (item.sizes?.length || 0), 0) || 0;
+      await addNotification({
+        type: 'batch_created',
+        title: 'New Batch Created',
+        message: `Batch "${batch.name || batch.batchNumber}" created with ${itemCount} product variants`,
+        category: 'inventory',
+        priority: 'medium',
+        icon: '📦'
+      }, userInfo);
       
       return newBatch;
     } catch (error) {
@@ -138,17 +151,31 @@ export const useBatchStore = create((set, get) => ({
     }
   },
 
-  deleteBatch: async (id) => {
+  deleteBatch: async (id, userInfo) => {
     try {
+      // Get batch name before deletion for notification
+      const { batches } = get();
+      const batch = batches.find(b => b.id === id);
+      const batchName = batch?.name || batch?.batchNumber || 'Unknown Batch';
+      
       // Delete from Firebase
       await deleteDoc(doc(db, 'batchInventory', id));
       
       // Update local state
       set((state) => ({
-        batches: state.batches.filter((batch) => batch.id !== id)
+        batches: state.batches.filter(batch => batch.id !== id)
       }));
-      
-      return true;
+
+      // Create notification for batch deletion
+      const { addNotification } = useNotificationStore.getState();
+      await addNotification({
+        type: 'batch_deleted',
+        title: 'Batch Deleted',
+        message: `Batch "${batchName}" has been removed from inventory`,
+        category: 'inventory',
+        priority: 'medium',
+        icon: '🗑️'
+      }, userInfo);
     } catch (error) {
       console.error('Error deleting batch:', error);
       throw error;

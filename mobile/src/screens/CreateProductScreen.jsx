@@ -12,6 +12,7 @@ import {
   Image,
   Modal
 } from 'react-native';
+import { serverTimestamp } from 'firebase/firestore';
 import { getColors } from '../constants/colors';
 import { useTheme } from '../contexts/ThemeContext';
 import * as ImagePicker from 'expo-image-picker';
@@ -49,6 +50,7 @@ export default function CreateProductScreen({ navigation }) {
     category: 'School Uniform',
     type: '',
     gender: '',
+    level: 'JUNIOR', // Add level field like web app
     sellingPrice: '', // Price for this school allocation
     variants: [], // Selected variants with quantities to allocate
     imageUri: null // Selected product image
@@ -57,6 +59,7 @@ export default function CreateProductScreen({ navigation }) {
   // State for dropdown visibility
   const [showTypeModal, setShowTypeModal] = useState(false);
   const [showGenderModal, setShowGenderModal] = useState(false);
+  const [showLevelModal, setShowLevelModal] = useState(false);
   const [showSchoolModal, setShowSchoolModal] = useState(false);
   
   // State for variant selection process
@@ -103,7 +106,7 @@ export default function CreateProductScreen({ navigation }) {
           ...prev,
           imageUri: selectedImage.uri
         }));
-        console.log('Image selected:', selectedImage.uri);
+        // Image selected
       }
     } catch (error) {
       console.error('Error picking image:', error);
@@ -114,8 +117,11 @@ export default function CreateProductScreen({ navigation }) {
   const { width } = Dimensions.get('window');
 
   useEffect(() => {
-    fetchBatches();
+    // Subscribe to batches and schools
+    const unsubscribeBatches = fetchBatches();
     fetchSchools();
+
+    // Start animations
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
@@ -134,6 +140,13 @@ export default function CreateProductScreen({ navigation }) {
         useNativeDriver: true,
       })
     ]).start();
+
+    // Cleanup subscription on unmount
+    return () => {
+      if (unsubscribeBatches && typeof unsubscribeBatches === 'function') {
+        unsubscribeBatches();
+      }
+    };
   }, []);
   
   useEffect(() => {
@@ -143,17 +156,10 @@ export default function CreateProductScreen({ navigation }) {
     }
   }, [batches]);
 
-  // Debug logs
-  console.log('Schools from store:', schools);
-
-  // Debug logs
-  console.log('Available types:', availableTypes);
-  console.log('Batches:', batches);
   
   // Step 1: Read from Warehouse (batchInventory) - Process active batches
   const processActiveBatches = () => {
     const activeBatches = batches.filter(batch => batch.status === 'active');
-    console.log('Processing batches:', activeBatches);
     
     const types = new Set();
     const variants = {};
@@ -161,19 +167,17 @@ export default function CreateProductScreen({ navigation }) {
     const quantities = {};
 
     activeBatches.forEach(batch => {
-      console.log(`Processing batch: ${batch.name} Type: ${batch.type}`);
-      
       // Extract type from batch level - keep original case and normalize display
       if (batch.type) {
         // Capitalize first letter for display
         const displayType = batch.type.charAt(0).toUpperCase() + batch.type.slice(1);
         types.add(displayType);
-        console.log(`Added type from batch: ${displayType}`);
       }
 
+      
       if (batch.items && Array.isArray(batch.items)) {
+        
         batch.items.forEach(item => {
-          console.log('Processing item:', item);
           
           // Extract variantType from items (this is the actual variant like 'short sleeve', 'charcoal')
           if (item.variantType) {
@@ -191,7 +195,6 @@ export default function CreateProductScreen({ navigation }) {
 
             // Add the variant (e.g., 'short sleeve', 'charcoal')
             variants[batchType].add(item.variantType);
-            console.log(`Added variant for ${batchType}: ${item.variantType}`);
 
             // Extract sizes and quantities - Fix key format to match usage
             if (item.sizes && Array.isArray(item.sizes)) {
@@ -208,9 +211,18 @@ export default function CreateProductScreen({ navigation }) {
                   // Store quantities with the same key format used for lookup
                   const quantityKey = `${batchType}|${item.variantType}|${sizeInfo.size}`;
                   if (!quantities[quantityKey]) {
-                    quantities[quantityKey] = { total: 0 };
+                    quantities[quantityKey] = { total: 0, batches: [] };
                   }
                   quantities[quantityKey].total += (parseInt(sizeInfo.quantity) || 0);
+                  
+                  // CRITICAL FIX: Store batch allocation information for deduction
+                  quantities[quantityKey].batches.push({
+                    batchId: batch.id, // This should be the document ID from Firebase
+                    batchName: batch.name,
+                    availableQuantity: parseInt(sizeInfo.quantity) || 0,
+                    variantType: item.variantType,
+                    color: item.color || item.variantType
+                  });
                 }
               });
             }
@@ -220,18 +232,11 @@ export default function CreateProductScreen({ navigation }) {
     });
     
     const finalTypes = Array.from(types);
-    console.log('Final types extracted:', finalTypes);
-    console.log('Final variants:', Object.fromEntries(
-      Object.entries(variants).map(([k, v]) => [k, Array.from(v)])
-    ));
     // Convert Sets to Arrays and include variant-specific size mappings
     const finalSizes = {};
     Object.entries(sizes).forEach(([key, sizeSet]) => {
       finalSizes[key] = Array.from(sizeSet);
     });
-    
-    console.log('Final sizes structure:', finalSizes);
-    console.log('Final quantities structure:', quantities);
     
     setAvailableTypes(finalTypes);
     setAvailableVariants(Object.fromEntries(
@@ -340,7 +345,6 @@ export default function CreateProductScreen({ navigation }) {
       })
     };
     
-    console.log('Adding variant with price:', variantWithBatchInfo);
     
     setFormData(prev => ({
       ...prev,
@@ -392,21 +396,23 @@ export default function CreateProductScreen({ navigation }) {
         category: formData.category,
         type: formData.type,
         gender: formData.gender,
+        level: formData.level, // Add level field to match web app
         sellingPrice: parseFloat(formData.sellingPrice), // School-specific price
         variants: formData.variants.map(variant => ({
           color: variant.color,
           variant: variant.variant || selectedColor,
-          price: variant.price || 0, // Include price in variant
+          price: parseFloat(formData.sellingPrice), // Use user-entered selling price instead of batch price
           sizes: variant.sizes.map(size => ({
             size: size.size,
             quantity: size.quantity,
             initialQuantity: size.quantity,
+            price: parseFloat(formData.sellingPrice), // Use user-entered price for each size
             // Store batch references for traceability
             batchAllocations: size.batchAllocations
           }))
         })),
-        createdAt: new Date(),
-        updatedAt: new Date(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
         createdBy: user?.displayName || user?.email,
         createdByUid: user?.uid,
         createdByRole: userRole,
@@ -414,21 +420,24 @@ export default function CreateProductScreen({ navigation }) {
         // Critical: Store which batches this allocation came from
         sourceBatches: formData.variants.flatMap(variant => 
           variant.sizes.flatMap(size => 
-            size.batchAllocations.map(batch => batch.batchId)
+            (size.batchAllocations || []).map(batch => batch.batchId)
           )
         ).filter((id, index, arr) => arr.indexOf(id) === index) // unique batch IDs
       };
 
-      // Step 3b: Deduct allocated quantities from batchInventory (Update warehouse)
-      // This would involve updating each batch document to reduce quantities
-      // Implementation would use Firebase transactions to ensure consistency
       
-      console.log('Product allocation data:', productData);
-      console.log('Batch deductions needed:', formData.variants);
+      // CRITICAL FIX: Actually save the product to Firebase
+      const userInfo = {
+        id: user?.uid,
+        name: user?.displayName,
+        fullName: user?.displayName,
+        email: user?.email
+      };
+      await addProduct(productData, 'uniform', userInfo);
       
       Alert.alert(
         'Success', 
-        `Product allocated to ${formData.school} successfully! Stock has been deducted from batch inventory.`,
+        `Product "${formData.productName}" has been created and allocated to ${formData.school} successfully!`,
         [
           {
             text: 'OK',
@@ -437,8 +446,8 @@ export default function CreateProductScreen({ navigation }) {
         ]
       );
     } catch (error) {
-      console.error('Allocation error:', error);
-      Alert.alert('Error', 'Failed to allocate product. Please try again.');
+      console.error('Product creation error:', error);
+      Alert.alert('Error', 'Failed to create product. Please try again.');
     }
   };
 
@@ -925,6 +934,48 @@ export default function CreateProductScreen({ navigation }) {
                       </Text>
                     </View>
                     <Ionicons name="chevron-down" size={20} color={formData.gender ? 'white' : '#94a3b8'} />
+                  </TouchableOpacity>
+                </View>
+
+                {/* Level */}
+                <View style={{ position: 'relative' }}>
+                  <Text style={{ fontSize: 14, fontWeight: '600', color: colors.mutedForeground, marginBottom: 8 }}>
+                    Level
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => setShowLevelModal(true)}
+                    style={{
+                      borderRadius: 12,
+                      padding: 16,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      borderWidth: 1,
+                      borderColor: formData.level ? colors.primary : colors.border,
+                      backgroundColor: formData.level ? colors.primary : colors.card
+                    }}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <View style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: 16,
+                        backgroundColor: formData.level ? 'rgba(255,255,255,0.2)' : '#e2e8f0',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginRight: 12
+                      }}>
+                        <Text style={{ fontSize: 16 }}>🎓</Text>
+                      </View>
+                      <Text style={{ 
+                        fontSize: 16, 
+                        color: formData.level ? 'white' : '#94a3b8', 
+                        fontWeight: '600' 
+                      }}>
+                        {formData.level || 'Select Level'}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-down" size={20} color={formData.level ? 'white' : '#94a3b8'} />
                   </TouchableOpacity>
                 </View>
               </View>
@@ -1738,16 +1789,112 @@ export default function CreateProductScreen({ navigation }) {
                     {gender}
                   </Text>
                   {formData.gender === gender && (
-                    <View style={{
-                      width: 28,
-                      height: 28,
-                      borderRadius: 14,
-                      backgroundColor: '#ef4444',
-                      alignItems: 'center',
-                      justifyContent: 'center'
-                    }}>
-                      <Text style={{ fontSize: 16, color: 'white', fontWeight: 'bold' }}>✓</Text>
-                    </View>
+                    <Ionicons name="checkmark-circle" size={24} color={colors.primary} />
+                  )}
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Level Selection Modal */}
+      <Modal
+        visible={showLevelModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowLevelModal(false)}
+      >
+        <View style={{
+          flex: 1,
+          backgroundColor: 'rgba(0,0,0,0.5)',
+          justifyContent: 'flex-end'
+        }}>
+          <View style={{
+            backgroundColor: colors.background,
+            borderTopLeftRadius: 24,
+            borderTopRightRadius: 24,
+            height: '50%',
+            paddingTop: 20
+          }}>
+            {/* Modal Header */}
+            <View style={{
+              paddingHorizontal: 20,
+              paddingBottom: 20,
+              borderBottomWidth: 1,
+              borderBottomColor: '#f3f4f6'
+            }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Text style={{ fontSize: 20, fontWeight: '700', color: colors.foreground }}>
+                  Select Level
+                </Text>
+                <TouchableOpacity
+                  onPress={() => setShowLevelModal(false)}
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 16,
+                    backgroundColor: '#f1f5f9',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  <Text style={{ fontSize: 18, color: colors.mutedForeground }}>×</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Modal Content */}
+            <View style={{ flex: 1, backgroundColor: colors.muted }}>
+              {['JUNIOR', 'SENIOR'].map((level) => (
+                <TouchableOpacity
+                  key={level}
+                  onPress={() => {
+                    setFormData(prev => ({ ...prev, level }));
+                    setShowLevelModal(false);
+                  }}
+                  style={{
+                    paddingHorizontal: 20,
+                    paddingVertical: 18,
+                    backgroundColor: colors.card,
+                    marginHorizontal: 16,
+                    marginVertical: 8,
+                    borderRadius: 16,
+                    shadowColor: '#000',
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.08,
+                    shadowRadius: 4,
+                    elevation: 3,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    borderWidth: formData.level === level ? 2 : 0,
+                    borderColor: formData.level === level ? colors.primary : colors.border
+                  }}
+                >
+                  <View style={{
+                    width: 48,
+                    height: 48,
+                    borderRadius: 24,
+                    backgroundColor: level === 'JUNIOR' ? '#fef3c7' : '#e0f2fe',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginRight: 16
+                  }}>
+                    <Text style={{ fontSize: 24 }}>
+                      {level === 'JUNIOR' ? '🎒' : '🎓'}
+                    </Text>
+                  </View>
+                  <Text style={{ 
+                    fontSize: 18, 
+                    color: colors.foreground, 
+                    fontWeight: '700',
+                    flex: 1
+                  }}>
+                    {level === 'JUNIOR' ? 'Junior' : 'Senior'}
+                  </Text>
+                  {formData.level === level && (
+                    <Ionicons name="checkmark-circle" size={24} color={colors.primary} />
                   )}
                 </TouchableOpacity>
               ))}

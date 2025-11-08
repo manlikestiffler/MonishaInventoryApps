@@ -12,6 +12,7 @@ import { useBatchStore } from '../../configuration/batchStore';
 import { useInventoryStore } from '../../configuration/inventoryStore';
 import { useSchoolStore } from '../../configuration/schoolStore';
 import { useOrderStore } from '../../configuration/orderStore';
+import { useNotificationStore } from '../../configuration/notificationStore';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
@@ -32,6 +33,7 @@ export default function DashboardScreen() {
   const { batches, loading: batchesLoading, subscribeToAllBatches, unsubscribeFromBatches } = useBatchStore();
   const { orders, loading: ordersLoading, fetchOrders } = useOrderStore();
   const { schools, loading: schoolsLoading, fetchSchools } = useSchoolStore();
+  const { unreadCount } = useNotificationStore();
 
   // All hooks must be declared at the top level
   const [isLoading, setIsLoading] = useState(true);
@@ -234,6 +236,43 @@ export default function DashboardScreen() {
           </View>
           
           <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TouchableOpacity
+              onPress={() => navigation.navigate('Notifications')}
+              style={{
+                backgroundColor: 'rgba(255, 255, 255, 0.15)',
+                borderRadius: 8,
+                padding: 8,
+                width: 36,
+                height: 36,
+                alignItems: 'center',
+                justifyContent: 'center',
+                position: 'relative'
+              }}
+            >
+              <Ionicons name="notifications-outline" size={18} color="white" />
+              {unreadCount > 0 && (
+                <View style={{
+                  position: 'absolute',
+                  top: 4,
+                  right: 4,
+                  backgroundColor: '#ff4444',
+                  borderRadius: 8,
+                  minWidth: 16,
+                  height: 16,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  paddingHorizontal: 4
+                }}>
+                  <Text style={{
+                    color: 'white',
+                    fontSize: 10,
+                    fontWeight: 'bold'
+                  }}>
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
             <TouchableOpacity
               style={{
                 backgroundColor: 'rgba(255, 255, 255, 0.15)',

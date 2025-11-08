@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { Plus, X, ArrowLeft, Package, DollarSign, Search, Trash2 } from 'lucide-react';
 import Button from '../components/ui/Button';
 import { useAuthStore } from '../stores/authStore';
+import useNotificationStore from '../stores/notificationStore';
 import { collection, addDoc, getDocs } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { toast } from 'react-hot-toast';
@@ -11,6 +12,7 @@ import { toast } from 'react-hot-toast';
 const CreateBatch = () => {
   const navigate = useNavigate();
   const { user, userRole } = useAuthStore();
+  const { createBatchNotification } = useNotificationStore();
 
   // Create a ref to track current variant state
   const sizesRef = useRef({});
@@ -266,6 +268,11 @@ const CreateBatch = () => {
       };
 
       const docRef = await addDoc(collection(db, 'batchInventory'), batchData);
+      
+      // Create notification for batch creation
+      createBatchNotification(batchName, batchVariants.length);
+      
+      toast.success(`Batch "${batchName}" created successfully!`);
       navigate('/batches');
     } catch (error) {
       console.error('Error creating batch:', error);

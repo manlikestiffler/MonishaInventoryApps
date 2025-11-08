@@ -10,6 +10,7 @@ import { UNIFORM_CATEGORIES } from '../constants/uniforms';
 import { toast } from 'react-hot-toast';
 import { useAuthStore } from '../stores/authStore';
 import { useInventoryStore } from '../stores/inventoryStore';
+import useNotificationStore from '../stores/notificationStore';
 import React from 'react'; // Added for useMemo
 import Lottie from "lottie-react";
 import successAnimation from "../assets/Checkmark Burst.json";
@@ -81,6 +82,7 @@ const AddProductNew = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const { addProduct } = useInventoryStore();
+  const { createProductNotification } = useNotificationStore();
   const [loading, setLoading] = useState(false);
   const [productType, setProductType] = useState(PRODUCT_TYPES.UNIFORM);
   const [error, setError] = useState('');
@@ -685,12 +687,21 @@ const AddProductNew = () => {
         }
         productData = {
           ...uniformData,
-          createdBy: user?.email || 'unknown',
+          createdBy: userProfile.fullName || userProfile.name || user?.email || 'unknown', // Use full name instead of email
           createdByUid: userProfile.id, // Use the Firestore document ID
           batchId: batchId,
         };
         // Add to uniforms collection
-        await addProduct(productData, 'uniform');
+        const userInfo = {
+          id: user?.uid,
+          name: user?.displayName,
+          fullName: user?.displayName,
+          email: user?.email
+        };
+        await addProduct(productData, 'uniform', userInfo);
+        
+        // Create notification for product creation
+        createProductNotification(uniformData.name, uniformData.variants.length);
         
         // Update batch inventory
         for (const variant of uniformData.variants) {
@@ -726,13 +737,22 @@ const AddProductNew = () => {
         }
         productData = {
           ...rawMaterialData,
-          createdBy: user?.email || 'unknown',
+          createdBy: userProfile.fullName || userProfile.name || user?.email || 'unknown', // Use full name instead of email
           createdByUid: userProfile.id, // Use the Firestore document ID
           productType: "raw_material"
         };
         
         // Add to raw_materials collection
-        await addProduct(productData, 'raw_material');
+        const userInfo = {
+          id: user?.uid,
+          name: user?.displayName,
+          fullName: user?.displayName,
+          email: user?.email
+        };
+        await addProduct(productData, 'raw_material', userInfo);
+        
+        // Create notification for raw material creation
+        createProductNotification(rawMaterialData.name, 1);
       }
       
       // Success message and reset form

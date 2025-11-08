@@ -5,6 +5,8 @@ import { useTheme } from '../contexts/ThemeContext';
 import { Ionicons } from '@expo/vector-icons';
 import { useBatchStore } from '../../configuration/batchStore';
 import { formatDate, formatShortDate } from '../utils/dateUtils';
+import { collection, getDocs } from 'firebase/firestore';
+import { db } from '../../config/firebase';
 
 export default function BatchDetailsScreen({ navigation, route }) {
   const { batchId } = route.params;
@@ -15,6 +17,7 @@ export default function BatchDetailsScreen({ navigation, route }) {
   const [batchDetails, setBatchDetails] = useState(null);
   const [enrichedItems, setEnrichedItems] = useState([]);
   const [expandedVariants, setExpandedVariants] = useState({});
+  const [creatorName, setCreatorName] = useState('');
   const [summaryStats, setSummaryStats] = useState({
     totalItems: 0,
     totalValue: 0,
@@ -51,12 +54,50 @@ export default function BatchDetailsScreen({ navigation, route }) {
     fetchBatchDetails();
   }, [batchId]);
 
+  const fetchCreatorName = async (createdByUid) => {
+    if (!createdByUid) {
+      setCreatorName('Unknown User');
+      return;
+    }
+
+    try {
+      // Try different possible collection names for users
+      const possibleCollections = ['inventory_staff', 'inventory_managers', 'staff', 'managers', 'users', 'accounts'];
+      
+      for (const collectionName of possibleCollections) {
+        try {
+          const snapshot = await getDocs(collection(db, collectionName));
+          const user = snapshot.docs.find(doc => doc.id === createdByUid);
+          
+          if (user) {
+            const userData = user.data();
+            const fullName = `${userData.firstName || ''} ${userData.lastName || ''}`.trim();
+            const displayName = fullName || userData.displayName || userData.name || userData.email || 'Unknown User';
+            setCreatorName(displayName);
+            return;
+          }
+        } catch (error) {
+          console.log(`Collection ${collectionName} not accessible:`, error.message);
+        }
+      }
+      
+      // If no user found, fallback to email formatting
+      setCreatorName('Unknown User');
+    } catch (error) {
+      console.error('Error fetching creator name:', error);
+      setCreatorName('Unknown User');
+    }
+  };
+
   const fetchBatchDetails = () => {
     // 1. Fetch batch document from Firebase data
     const batch = batches.find(b => b.id === batchId);
     if (!batch) return;
 
     setBatchDetails(batch);
+    
+    // Fetch creator name
+    fetchCreatorName(batch.createdByUid || batch.createdBy);
 
     // 2. Use batch items directly (Firebase structure) - match web version data structure
     const enriched = batch.items?.map(item => ({
@@ -167,13 +208,7 @@ export default function BatchDetailsScreen({ navigation, route }) {
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingTop: 16, borderTopWidth: 1, borderTopColor: colors.border }}>
               <View style={{ alignItems: 'center', flex: 1 }}>
                 <Text style={{ fontSize: 14, fontWeight: '700', color: colors.cardForeground }}>
-                  {batchDetails.createdBy ? 
-                    batchDetails.createdBy.split('@')[0]
-                      .split(/[._]/)
-                      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-                      .join(' ') 
-                    : 'Unknown'
-                  }
+                  {creatorName || 'Unknown User'}
                 </Text>
                 <Text style={{ fontSize: 10, color: colors.mutedForeground, fontWeight: '600' }}>Created By</Text>
               </View>

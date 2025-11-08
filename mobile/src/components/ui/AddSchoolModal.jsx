@@ -4,11 +4,13 @@ import { getColors } from '../../constants/colors';
 import { useTheme } from '../../contexts/ThemeContext';
 import { Ionicons } from '@expo/vector-icons';
 import { useSchoolStore } from '../../../configuration/schoolStore';
+import { useAuthStore } from '../../../configuration/authStore';
 
 const AddSchoolModal = ({ visible, onClose }) => {
   const { isDarkMode } = useTheme();
   const colors = getColors(isDarkMode);
   const { addSchool } = useSchoolStore();
+  const { user } = useAuthStore();
   const [schoolName, setSchoolName] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -30,7 +32,13 @@ const AddSchoolModal = ({ visible, onClose }) => {
         updatedAt: new Date().toISOString()
       };
       
-      await addSchool(schoolData);
+      const userInfo = {
+        id: user?.uid,
+        name: user?.displayName,
+        fullName: user?.displayName,
+        email: user?.email
+      };
+      await addSchool(schoolData, userInfo);
       
       // Reset form and close modal
       setSchoolName('');

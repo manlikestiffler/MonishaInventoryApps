@@ -27,6 +27,7 @@ import Select from '../components/ui/Select';
 import Badge from '../components/ui/Badge';
 import DetailedInventoryAnalysis from '../components/dashboard/DetailedInventoryAnalysis';
 import LoadingScreen from '../components/ui/LoadingScreen';
+import ReorderModal from '../components/inventory/ReorderModal';
 import { useInventoryStore } from '../stores/inventoryStore';
 import { collection, getDocs, query, orderBy, doc, getDoc, where } from 'firebase/firestore';
 import { db } from '../config/firebase';
@@ -41,6 +42,25 @@ const getUniqueLevels = (products) => {
   return [...new Set(products.map(product => product.level))].filter(Boolean);
 };
 
+// Calculate total inventory count (sum of all size quantities)
+const calculateTotalInventoryCount = (products) => {
+  return products.reduce((total, product) => {
+    if (!product.variants || !Array.isArray(product.variants)) return total;
+    
+    const productTotal = product.variants.reduce((variantTotal, variant) => {
+      if (!variant.sizes || !Array.isArray(variant.sizes)) return variantTotal;
+      
+      const variantSizeTotal = variant.sizes.reduce((sizeTotal, size) => {
+        return sizeTotal + (Number(size?.quantity) || 0);
+      }, 0);
+      
+      return variantTotal + variantSizeTotal;
+    }, 0);
+    
+    return total + productTotal;
+  }, 0);
+};
+
 // Enhanced helper function to calculate detailed stock status
 const calculateStockStatus = (variants) => {
   if (!Array.isArray(variants)) {
@@ -48,22 +68,38 @@ const calculateStockStatus = (variants) => {
   }
 
   let variantStatuses = [];
+  let hasOutOfStock = false;
+  let hasLowStock = false;
 
   variants.forEach(variant => {
     if (!variant?.sizes || !Array.isArray(variant.sizes)) return;
 
     const variantName = variant.variantType || 'Unknown';
     let totalQuantity = 0;
-    let status = 'in_stock';
+    let variantHasOutOfStock = false;
+    let variantHasLowStock = false;
 
+    // Check each size individually against its reorder level
     variant.sizes.forEach(size => {
       const quantity = Number(size?.quantity) || 0;
+      const reorderLevel = Number(size?.reorderLevel) || Number(variant?.defaultReorderLevel) || 5;
+      
       totalQuantity += quantity;
+
+      if (quantity === 0) {
+        variantHasOutOfStock = true;
+        hasOutOfStock = true;
+      } else if (quantity <= reorderLevel) {
+        variantHasLowStock = true;
+        hasLowStock = true;
+      }
     });
 
-    if (totalQuantity === 0) {
+    // Determine variant status based on individual size checks
+    let status = 'in_stock';
+    if (variantHasOutOfStock) {
       status = 'out_of_stock';
-    } else if (totalQuantity < 5) {
+    } else if (variantHasLowStock) {
       status = 'low_stock';
     }
 
@@ -74,10 +110,17 @@ const calculateStockStatus = (variants) => {
     });
   });
 
+  // Determine overall product status
+  let overallType = 'success';
+  if (hasOutOfStock) {
+    overallType = 'error';
+  } else if (hasLowStock) {
+    overallType = 'warning';
+  }
+
   return {
     details: variantStatuses,
-    type: variantStatuses.some(v => v.status === 'out_of_stock') ? 'error' :
-          variantStatuses.some(v => v.status === 'low_stock') ? 'warning' : 'success'
+    type: overallType
   };
 };
 
@@ -129,16 +172,22 @@ const Inventory = () => {
   const [batches, setBatches] = useState([]);
   const [showModal, setShowModal] = useState(false);
   const [selectedProducts, setSelectedProducts] = useState(null);
+  const [showAllProducts, setShowAllProducts] = useState(false);
+  const [modalSearchTerm, setModalSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 20;
   const [error, setError] = useState(null);
   const [schoolsMap, setSchoolsMap] = useState({});
   const [users, setUsers] = useState([]);
   const [usersMap, setUsersMap] = useState({});
   const { isManager } = useAuthStore();
 
-  const { products: storeProducts, loading: storeLoading, error: storeError, setupRealtimeListeners, cleanup } = useInventoryStore();
+  const { products: storeProducts, loading: storeLoading, error: storeError, setupRealtimeListeners, cleanup, deleteProduct } = useInventoryStore();
 
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [productToDelete, setProductToDelete] = useState(null);
+  const [showReceiveModal, setShowReceiveModal] = useState(false);
+  const [receiveModalData, setReceiveModalData] = useState(null);
 
   // Fetch schools and create a map of id to name
   useEffect(() => {
@@ -206,7 +255,7 @@ const Inventory = () => {
         console.log('Checking for user collections...');
         
         // Try different possible collection names for users
-        const possibleCollections = ['staff', 'managers', 'users', 'accounts'];
+        const possibleCollections = ['inventory_staff', 'inventory_managers', 'staff', 'managers', 'users', 'accounts'];
         const userCollections = {};
         
         for (const collectionName of possibleCollections) {
@@ -221,39 +270,66 @@ const Inventory = () => {
           }
         }
         
-        // If no user collections found, extract creator info from products
+        // If no user collections found, extract creator info from products and fetch actual user profiles
         if (Object.keys(userCollections).length === 0) {
-          console.log('No user collections found. Extracting creator info from products...');
+          console.log('No user collections found. Extracting creator info from products and fetching user profiles...');
           
-          // Get products to extract creator information
+          // Get products to extract creator UIDs
           const uniformsSnapshot = await getDocs(collection(db, 'uniforms'));
           const materialsSnapshot = await getDocs(collection(db, 'raw_materials'));
           
           const creatorMap = {};
+          const creatorUIDs = new Set();
           
-          // Extract creator info from uniforms - prefer full name over email
-          uniformsSnapshot.docs.forEach(doc => {
+          // Extract creator UIDs from products
+          [...uniformsSnapshot.docs, ...materialsSnapshot.docs].forEach(doc => {
             const data = doc.data();
-            if (data.createdByUid && (data.createdByName || data.createdBy)) {
+            if (data.createdByUid) {
+              creatorUIDs.add(data.createdByUid);
+            }
+          });
+          
+          // Fetch actual user profiles from user collections
+          const userCollectionsToCheck = ['inventory_staff', 'inventory_managers', 'staff', 'managers', 'users'];
+          
+          for (const collectionName of userCollectionsToCheck) {
+            try {
+              const usersSnapshot = await getDocs(collection(db, collectionName));
+              usersSnapshot.docs.forEach(doc => {
+                const userData = doc.data();
+                const userId = doc.id;
+                
+                if (creatorUIDs.has(userId)) {
+                  const fullName = userData.fullName || 
+                                 (userData.firstName && userData.lastName ? `${userData.firstName} ${userData.lastName}`.trim() : null) ||
+                                 userData.displayName ||
+                                 userData.name ||
+                                 userData.email;
+                  
+                  creatorMap[userId] = {
+                    name: fullName,
+                    role: userData.role || 'staff'
+                  };
+                }
+              });
+            } catch (error) {
+              console.log(`Could not access ${collectionName}:`, error.message);
+            }
+          }
+          
+          // Fallback: extract any remaining creator info from products themselves
+          [...uniformsSnapshot.docs, ...materialsSnapshot.docs].forEach(doc => {
+            const data = doc.data();
+            if (data.createdByUid && !creatorMap[data.createdByUid]) {
+              const creatorName = data.createdByName || data.createdBy || 'Unknown User';
               creatorMap[data.createdByUid] = {
-                name: data.createdByName || data.createdBy,
-                role: data.createdByRole || 'staff' // Default role
+                name: creatorName,
+                role: data.createdByRole || 'staff'
               };
             }
           });
           
-          // Extract creator info from materials - prefer full name over email
-          materialsSnapshot.docs.forEach(doc => {
-            const data = doc.data();
-            if (data.createdByUid && (data.createdByName || data.createdBy)) {
-              creatorMap[data.createdByUid] = {
-                name: data.createdByName || data.createdBy,
-                role: data.createdByRole || 'staff' // Default role
-              };
-            }
-          });
-          
-          console.log('Creator map extracted from products:', creatorMap);
+          console.log('Creator map with full names:', creatorMap);
           setUsersMap(creatorMap);
           
           // Continue with the rest of initialization
@@ -288,7 +364,7 @@ const Inventory = () => {
             allUsers.push({
               id: doc.id,
               ...data,
-              role: collectionName === 'managers' ? 'manager' : 'staff'
+              role: collectionName.includes('managers') ? 'manager' : 'staff'
             });
           });
         });
@@ -299,8 +375,9 @@ const Inventory = () => {
         // Create users map for quick lookup
         const usersMapData = {};
         allUsers.forEach(user => {
+          const fullName = `${user.firstName || ''} ${user.lastName || ''}`.trim();
           usersMapData[user.id] = {
-            name: user.name || user.email || 'Unknown User',
+            name: fullName || user.displayName || user.name || user.email || 'Unknown User',
             role: user.role || 'N/A'
           };
         });
@@ -315,6 +392,10 @@ const Inventory = () => {
           ...doc.data()
         }));
         setSchools(schoolsData);
+        
+        // Wait for user info to be loaded before setting up listeners
+        // This ensures we have full names ready when products are displayed
+        console.log('User info loaded, setting up real-time listeners...');
         
         // Setup real-time listeners for products
         setupRealtimeListeners();
@@ -343,15 +424,15 @@ const Inventory = () => {
     };
   }, []);
 
-  // Use store products with user info mapping
+  // Use store products with user info mapping - only update when both data and user info are ready
   useEffect(() => {
     console.log('Store products changed:', storeProducts?.length || 0);
     console.log('Users map keys:', Object.keys(usersMap).length);
     
-    if (storeProducts && storeProducts.length > 0) {
+    if (storeProducts && storeProducts.length > 0 && Object.keys(usersMap).length > 0) {
       const productsWithUserInfo = storeProducts.map(product => {
         // Check if product already has creator info from store
-        if (product.creatorName && product.creatorRole) {
+        if (product.creatorName && product.creatorRole && !product.creatorName.includes('@')) {
           return {
             ...product,
             createdAt: product.createdAt?.toDate ? product.createdAt.toDate() : product.createdAt,
@@ -359,14 +440,14 @@ const Inventory = () => {
           };
         }
         
-        // Fallback to local users map
+        // Use local users map for full names
         const creatorInfo = usersMap[product.createdByUid];
         console.log('Product creator lookup:', product.createdByUid, creatorInfo);
         
         return {
           ...product,
-          creatorName: creatorInfo?.name || 'N/A',
-          creatorRole: creatorInfo?.role || 'N/A',
+          creatorName: creatorInfo?.name || product.createdByName || product.createdBy || 'N/A',
+          creatorRole: creatorInfo?.role || product.createdByRole || 'N/A',
           createdAt: product.createdAt?.toDate ? product.createdAt.toDate() : product.createdAt,
           updatedAt: product.updatedAt?.toDate ? product.updatedAt.toDate() : product.updatedAt
         };
@@ -397,22 +478,51 @@ const Inventory = () => {
       
       const uniformsSnapshot = await getDocs(uniformsQuery);
       
-      const uniformsData = uniformsSnapshot.docs.map(doc => {
+      const uniformsData = await Promise.all(uniformsSnapshot.docs.map(async (doc) => {
         const data = doc.data();
         
-        // Extract creator info from the product itself - prefer full name over email
-        const creatorName = data.createdByName || data.createdBy || 'N/A';
-        const creatorRole = data.createdByRole || 'staff'; // Default role
+        // Try to get actual user profile for full name
+        let creatorName = 'N/A';
+        let creatorRole = 'staff';
         
-        // Add to direct users map for consistency
-        if (data.createdByUid && (data.createdByName || data.createdBy)) {
+        if (data.createdByUid) {
+          // Try to fetch user profile from user collections
+          const userCollectionsToCheck = ['inventory_staff', 'inventory_managers', 'staff', 'managers', 'users'];
+          
+          for (const collectionName of userCollectionsToCheck) {
+            try {
+              const userDoc = await getDoc(doc(db, collectionName, data.createdByUid));
+              if (userDoc.exists()) {
+                const userData = userDoc.data();
+                creatorName = userData.fullName || 
+                             (userData.firstName && userData.lastName ? `${userData.firstName} ${userData.lastName}`.trim() : null) ||
+                             userData.displayName ||
+                             userData.name ||
+                             data.createdByName ||
+                             data.createdBy ||
+                             'Unknown User';
+                creatorRole = userData.role || data.createdByRole || 'staff';
+                break;
+              }
+            } catch (error) {
+              console.log(`Could not access user from ${collectionName}:`, error.message);
+            }
+          }
+          
+          // Fallback to product data if no user profile found
+          if (creatorName === 'N/A') {
+            creatorName = data.createdByName || data.createdBy || 'Unknown User';
+            creatorRole = data.createdByRole || 'staff';
+          }
+          
+          // Add to direct users map for consistency
           directUsersMap[data.createdByUid] = {
-            name: data.createdByName || data.createdBy,
-            role: data.createdByRole || 'staff'
+            name: creatorName,
+            role: creatorRole
           };
         }
         
-        console.log('Direct uniform creator:', data.createdByName || data.createdBy || data.createdByUid);
+        console.log('Direct uniform creator:', creatorName);
         
         return {
           id: doc.id,
@@ -422,7 +532,7 @@ const Inventory = () => {
           createdAt: data.createdAt?.toDate(),
           updatedAt: data.updatedAt?.toDate()
         };
-      });
+      }));
 
       // Fetch raw materials
       const materialsQuery = query(
@@ -431,22 +541,51 @@ const Inventory = () => {
       );
       
       const materialsSnapshot = await getDocs(materialsQuery);
-      const materialsData = materialsSnapshot.docs.map(doc => {
+      const materialsData = await Promise.all(materialsSnapshot.docs.map(async (doc) => {
         const data = doc.data();
         
-        // Extract creator info from the product itself - prefer full name over email
-        const creatorName = data.createdByName || data.createdBy || 'N/A';
-        const creatorRole = data.createdByRole || 'staff'; // Default role
+        // Try to get actual user profile for full name
+        let creatorName = 'N/A';
+        let creatorRole = 'staff';
         
-        // Add to direct users map for consistency
-        if (data.createdByUid && (data.createdByName || data.createdBy)) {
+        if (data.createdByUid) {
+          // Try to fetch user profile from user collections
+          const userCollectionsToCheck = ['inventory_staff', 'inventory_managers', 'staff', 'managers', 'users'];
+          
+          for (const collectionName of userCollectionsToCheck) {
+            try {
+              const userDoc = await getDoc(doc(db, collectionName, data.createdByUid));
+              if (userDoc.exists()) {
+                const userData = userDoc.data();
+                creatorName = userData.fullName || 
+                             (userData.firstName && userData.lastName ? `${userData.firstName} ${userData.lastName}`.trim() : null) ||
+                             userData.displayName ||
+                             userData.name ||
+                             data.createdByName ||
+                             data.createdBy ||
+                             'Unknown User';
+                creatorRole = userData.role || data.createdByRole || 'staff';
+                break;
+              }
+            } catch (error) {
+              console.log(`Could not access user from ${collectionName}:`, error.message);
+            }
+          }
+          
+          // Fallback to product data if no user profile found
+          if (creatorName === 'N/A') {
+            creatorName = data.createdByName || data.createdBy || 'Unknown User';
+            creatorRole = data.createdByRole || 'staff';
+          }
+          
+          // Add to direct users map for consistency
           directUsersMap[data.createdByUid] = {
-            name: data.createdByName || data.createdBy,
-            role: data.createdByRole || 'staff'
+            name: creatorName,
+            role: creatorRole
           };
         }
         
-        console.log('Direct material creator:', data.createdByName || data.createdBy || data.createdByUid);
+        console.log('Direct material creator:', creatorName);
         
         return {
           id: doc.id,
@@ -457,7 +596,7 @@ const Inventory = () => {
           createdAt: data.createdAt?.toDate(),
           updatedAt: data.updatedAt?.toDate()
         };
-      });
+      }));
       
       const allProducts = [...uniformsData, ...materialsData];
       setProducts(allProducts);
@@ -482,7 +621,14 @@ const Inventory = () => {
     if (productToDelete) {
       try {
         const isRawMaterial = productToDelete.type === 'raw_material';
-        await deleteProduct(productToDelete.id, isRawMaterial);
+        const { user, userProfile } = useAuthStore.getState();
+        const userInfo = {
+          id: user?.uid,
+          name: userProfile?.displayName || user?.displayName,
+          fullName: userProfile?.displayName || user?.displayName,
+          email: user?.email
+        };
+        await deleteProduct(productToDelete.id, isRawMaterial, userInfo);
         // Update local state after successful deletion
         setProducts(prevProducts => prevProducts.filter(p => p.id !== productToDelete.id));
         setShowDeleteModal(false);
@@ -490,6 +636,31 @@ const Inventory = () => {
       } catch (error) {
         console.error("Delete error:", error);
         setError('Failed to delete product. Please try again.');
+      }
+    }
+  };
+
+  const handleReceive = (product) => {
+    // Open receive modal with product data
+    // Get the first variant and first size for initial display
+    if (product.variants && product.variants.length > 0) {
+      const firstVariant = product.variants[0];
+      const firstSize = firstVariant.sizes && firstVariant.sizes.length > 0 ? firstVariant.sizes[0] : null;
+      
+      if (firstSize) {
+        setReceiveModalData({
+          product: product,
+          variant: {
+            id: firstVariant.id || `${product.id}-${firstVariant.variantType}`,
+            color: firstVariant.color,
+            variantType: firstVariant.variantType
+          },
+          size: firstSize.size,
+          currentStock: parseInt(firstSize.quantity) || 0,
+          reorderLevel: firstSize.reorderLevel || firstVariant.defaultReorderLevel || 5,
+          batchId: firstVariant.batchId || product.batchId
+        });
+        setShowReceiveModal(true);
       }
     }
   };
@@ -752,7 +923,7 @@ const Inventory = () => {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Total Items</p>
-                    <p className="mt-2 text-3xl font-bold text-gray-900 dark:text-gray-100">{products.length}</p>
+                    <p className="mt-2 text-3xl font-bold text-gray-900 dark:text-gray-100">{calculateTotalInventoryCount(products)}</p>
                   </div>
                   <div className="h-12 w-12 bg-indigo-50 dark:bg-gray-700 rounded-2xl flex items-center justify-center text-indigo-600 dark:text-indigo-400">
                     <Package className="w-6 h-6" />
@@ -765,7 +936,7 @@ const Inventory = () => {
                 variants={cardVariants}
                 className="bg-white dark:bg-black rounded-2xl border border-gray-200 dark:border-gray-700 p-6 hover:shadow-lg transition-all duration-300 cursor-pointer"
                 onClick={() => {
-                  const inStockProducts = products.filter(p => !calculateStockStatus(p.variants).type.includes('out_of_stock') && !calculateStockStatus(p.variants).type.includes('low_stock'));
+                  const inStockProducts = products.filter(p => calculateStockStatus(p.variants).type === 'success');
                   setSelectedProducts({
                     title: "In Stock Products",
                     products: inStockProducts,
@@ -778,7 +949,7 @@ const Inventory = () => {
                   <div>
                     <p className="text-sm font-medium text-gray-600 dark:text-gray-400">In Stock</p>
                     <p className="mt-2 text-3xl font-bold text-emerald-600 dark:text-emerald-400">
-                      {products.filter(p => !calculateStockStatus(p.variants).type.includes('out_of_stock') && !calculateStockStatus(p.variants).type.includes('low_stock')).length}
+                      {products.filter(p => calculateStockStatus(p.variants).type === 'success').length}
                     </p>
                   </div>
                   <div className="h-12 w-12 bg-emerald-50 dark:bg-gray-700 rounded-2xl flex items-center justify-center text-emerald-600 dark:text-emerald-400">
@@ -792,7 +963,7 @@ const Inventory = () => {
                 variants={cardVariants}
                 className="bg-white dark:bg-black rounded-2xl border border-gray-200 dark:border-gray-700 p-6 hover:shadow-lg transition-all duration-300 cursor-pointer"
                 onClick={() => {
-                  const lowStockProducts = products.filter(p => calculateStockStatus(p.variants).type.includes('low_stock'));
+                  const lowStockProducts = products.filter(p => calculateStockStatus(p.variants).type === 'warning');
                   setSelectedProducts({
                     title: "Low Stock Products",
                     products: lowStockProducts,
@@ -805,7 +976,7 @@ const Inventory = () => {
                   <div>
                     <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Low Stock</p>
                     <p className="mt-2 text-3xl font-bold text-amber-600 dark:text-amber-400">
-                      {products.filter(p => calculateStockStatus(p.variants).type.includes('low_stock')).length}
+                      {products.filter(p => calculateStockStatus(p.variants).type === 'warning').length}
                     </p>
                   </div>
                   <div className="h-12 w-12 bg-amber-50 dark:bg-gray-700 rounded-2xl flex items-center justify-center text-amber-600 dark:text-amber-400">
@@ -819,7 +990,7 @@ const Inventory = () => {
                 variants={cardVariants}
                 className="bg-white dark:bg-black rounded-2xl border border-gray-200 dark:border-gray-700 p-6 hover:shadow-lg transition-all duration-300 cursor-pointer"
                 onClick={() => {
-                  const outOfStockProducts = products.filter(p => calculateStockStatus(p.variants).type.includes('out_of_stock'));
+                  const outOfStockProducts = products.filter(p => calculateStockStatus(p.variants).type === 'error');
                   setSelectedProducts({
                     title: "Out of Stock Products",
                     products: outOfStockProducts,
@@ -832,7 +1003,7 @@ const Inventory = () => {
                   <div>
                     <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Out of Stock</p>
                     <p className="mt-2 text-3xl font-bold text-red-600 dark:text-red-400">
-                      {products.filter(p => calculateStockStatus(p.variants).type.includes('out_of_stock')).length}
+                      {products.filter(p => calculateStockStatus(p.variants).type === 'error').length}
                     </p>
                   </div>
                   <div className="h-12 w-12 bg-red-50 dark:bg-gray-700 rounded-2xl flex items-center justify-center text-red-600 dark:text-red-400">
@@ -849,79 +1020,295 @@ const Inventory = () => {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4"
-                  onClick={() => setShowModal(false)}
+                  className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+                  onClick={() => {
+                    setShowModal(false);
+                    setShowAllProducts(false);
+                    setModalSearchTerm('');
+                    setCurrentPage(1);
+                  }}
                 >
                   <motion.div
-                    initial={{ scale: 0.95, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    exit={{ scale: 0.95, opacity: 0 }}
+                    initial={{ scale: 0.95, opacity: 0, y: 20 }}
+                    animate={{ scale: 1, opacity: 1, y: 0 }}
+                    exit={{ scale: 0.95, opacity: 0, y: 20 }}
                     onClick={(e) => e.stopPropagation()}
-                    className="bg-white dark:bg-gray-800 rounded-3xl shadow-xl max-w-4xl w-full max-h-[80vh] overflow-hidden"
+                    className="bg-white bg-dark rounded-3xl shadow-2xl max-w-6xl w-full max-h-[85vh] overflow-hidden border border-gray-200 dark:border-gray-700"
                   >
-                    <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center">
-                      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">{selectedProducts.title}</h2>
-                      <button
-                        onClick={() => setShowModal(false)}
-                        className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors"
-                      >
-                        <X className="w-6 h-6 text-gray-500" />
-                      </button>
+                    {/* Header */}
+                    <div className="sticky top-0 z-10 bg-white/95 dark:bg-gray-900/95 backdrop-blur-sm border-b border-gray-200 dark:border-gray-700">
+                      <div className="flex items-center justify-between p-6">
+                        <div className="flex items-center gap-4">
+                          <div className="p-3 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl">
+                            <Package className="w-6 h-6 text-white" />
+                          </div>
+                          <div>
+                            <h2 className="text-2xl font-bold text-gray-900 dark:text-white">{selectedProducts.title}</h2>
+                            <p className="text-sm text-gray-500 dark:text-gray-400">
+                              {selectedProducts.products.length} product{selectedProducts.products.length !== 1 ? 's' : ''} found
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setShowModal(false);
+                            setShowAllProducts(false);
+                            setModalSearchTerm('');
+                            setCurrentPage(1);
+                          }}
+                          className="p-3 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-2xl transition-all duration-200 group"
+                        >
+                          <X className="w-6 h-6 text-gray-500 group-hover:text-gray-700 dark:group-hover:text-gray-300" />
+                        </button>
+                      </div>
                     </div>
-                    <div className="p-6 overflow-y-auto max-h-[calc(80vh-120px)]">
-                      <div className="space-y-6">
-                        {selectedProducts.products.map((product) => (
-                          <div key={product.id} className="bg-gray-50 dark:bg-gray-700/50 rounded-2xl p-6 space-y-4">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-4">
-                                <img
-                                  src={getProductImage(product)}
-                                  alt={product.name}
-                                  className="w-16 h-16 rounded-xl object-cover"
-                                />
-                                <div>
-                                  <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{product.name}</h3>
-                                  <p className="text-sm text-gray-500 dark:text-gray-400">{product.type}</p>
+
+                    {/* Search Bar */}
+                    {selectedProducts.products.length > 10 && (
+                      <div className="sticky top-[100px] z-10 bg-white/95 dark:bg-gray-900/95 backdrop-blur-sm border-b border-gray-200 dark:border-gray-700 px-6 py-4">
+                        <div className="relative">
+                          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                          <input
+                            type="text"
+                            placeholder="Search products..."
+                            value={modalSearchTerm}
+                            onChange={(e) => {
+                              setModalSearchTerm(e.target.value);
+                              setCurrentPage(1);
+                            }}
+                            className="w-full pl-10 pr-4 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Content */}
+                    <div className="overflow-y-auto max-h-[calc(85vh-180px)] custom-scrollbar">
+                      <div className="p-6">
+                        {(() => {
+                          // Filter products based on search term
+                          const filteredProducts = selectedProducts.products.filter(product =>
+                            product.name.toLowerCase().includes(modalSearchTerm.toLowerCase()) ||
+                            product.type.toLowerCase().includes(modalSearchTerm.toLowerCase()) ||
+                            product.level?.toLowerCase().includes(modalSearchTerm.toLowerCase()) ||
+                            product.gender?.toLowerCase().includes(modalSearchTerm.toLowerCase())
+                          );
+
+                          if (filteredProducts.length === 0) {
+                            return (
+                              <div className="text-center py-12">
+                                <div className="w-24 h-24 mx-auto mb-4 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center">
+                                  <Package className="w-12 h-12 text-gray-400" />
                                 </div>
+                                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                                  {modalSearchTerm ? 'No matching products found' : 'No products found'}
+                                </h3>
+                                <p className="text-gray-500 dark:text-gray-400">
+                                  {modalSearchTerm 
+                                    ? `No products match "${modalSearchTerm}". Try a different search term.`
+                                    : 'There are no products matching this criteria.'
+                                  }
+                                </p>
                               </div>
-                              <button
-                                onClick={() => handleViewDetails(product)}
-                                className="px-4 py-2 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 transition-colors text-sm font-medium"
-                              >
-                                View Details
-                              </button>
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                              {product.variants.map((variant, idx) => {
-                                const variantStatus = calculateStockStatus([variant]);
-                                if (
-                                  (selectedProducts.type === "out_of_stock" && variantStatus.type !== "out_of_stock") ||
-                                  (selectedProducts.type === "low_stock" && variantStatus.type !== "low_stock") ||
-                                  (selectedProducts.type === "in_stock" && (variantStatus.type === "out_of_stock" || variantStatus.type === "low_stock"))
-                                ) {
-                                  return null;
-                                }
-                                return (
-                                  <div key={idx} className="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700">
-                                    <div className="flex justify-between items-center mb-2">
-                                      <span className="font-medium text-gray-900 dark:text-gray-100">{variant.variantType}</span>
-                                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                                        variantStatus.type === 'out_of_stock' ? 'bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-400' :
-                                        variantStatus.type === 'low_stock' ? 'bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400' :
-                                        'bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400'
-                                      }`}>
-                                        {variantStatus.details[0].quantity} in stock
-                                      </span>
+                            );
+                          }
+
+                          // Pagination logic
+                          const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+                          const endIndex = startIndex + ITEMS_PER_PAGE;
+                          const paginatedProducts = filteredProducts.slice(startIndex, endIndex);
+                          const totalPages = Math.ceil(filteredProducts.length / ITEMS_PER_PAGE);
+
+                          return (
+                            <div className="space-y-4">
+                              {/* Performance info for large datasets */}
+                              {filteredProducts.length > 1000 && (
+                                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-2xl p-4 mb-6">
+                                  <div className="flex items-center gap-3">
+                                    <div className="w-8 h-8 bg-blue-100 dark:bg-blue-800 rounded-full flex items-center justify-center">
+                                      <Layers className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                                     </div>
-                                    <div className="text-sm text-gray-500 dark:text-gray-400">
-                                      Sizes: {variant.sizes.map(s => `${s.size} (${s.quantity})`).join(', ')}
+                                    <div>
+                                      <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                                        Large Dataset ({filteredProducts.length.toLocaleString()} products)
+                                      </p>
+                                      <p className="text-xs text-blue-700 dark:text-blue-300">
+                                        Showing {ITEMS_PER_PAGE} items per page for optimal performance
+                                      </p>
                                     </div>
                                   </div>
-                                );
-                              })}
+                                </div>
+                              )}
+
+                              {/* Products List */}
+                              {paginatedProducts.map((product, productIndex) => (
+                              <motion.div
+                                key={product.id}
+                                initial={{ opacity: 0, y: 20 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: productIndex * 0.05 }}
+                                className="bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-900 rounded-2xl p-6 border border-gray-200 dark:border-gray-700 hover:shadow-lg transition-all duration-300"
+                              >
+                                {/* Product Header */}
+                                <div className="flex items-center justify-between mb-6">
+                                  <div className="flex items-center gap-4">
+                                    <div className="relative">
+                                      <img
+                                        src={getProductImage(product)}
+                                        alt={product.name}
+                                        className="w-20 h-20 rounded-2xl object-cover shadow-md"
+                                      />
+                                      <div className="absolute -top-2 -right-2 w-6 h-6 bg-indigo-500 rounded-full flex items-center justify-center">
+                                        <span className="text-xs font-bold text-white">{product.variants?.length || 0}</span>
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <h3 className="text-xl font-bold text-gray-900 dark:text-white">{product.name}</h3>
+                                      <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">{product.type}</p>
+                                      <div className="flex items-center gap-2">
+                                        <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-lg text-xs font-medium">
+                                          {product.level || 'N/A'}
+                                        </span>
+                                        <span className="px-2 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 rounded-lg text-xs font-medium">
+                                          {product.gender || 'Unisex'}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <button
+                                    onClick={() => handleViewDetails(product)}
+                                    className="px-6 py-3 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white rounded-2xl transition-all duration-200 font-medium shadow-lg hover:shadow-xl transform hover:scale-105"
+                                  >
+                                    View Details
+                                  </button>
+                                </div>
+
+                                {/* Variants Grid */}
+                                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                                  {product.variants?.map((variant, idx) => {
+                                    const variantStatus = calculateStockStatus([variant]);
+                                    if (
+                                      (selectedProducts.type === "out_of_stock" && variantStatus.type !== "error") ||
+                                      (selectedProducts.type === "low_stock" && variantStatus.type !== "warning") ||
+                                      (selectedProducts.type === "in_stock" && variantStatus.type !== "success")
+                                    ) {
+                                      return null;
+                                    }
+                                    
+                                    const totalQuantity = variant.sizes?.reduce((sum, size) => sum + (Number(size.quantity) || 0), 0) || 0;
+                                    
+                                    return (
+                                      <div key={idx} className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-gray-200 dark:border-gray-600 hover:shadow-md transition-all duration-200">
+                                        <div className="flex justify-between items-start mb-3">
+                                          <div>
+                                            <h4 className="font-bold text-gray-900 dark:text-white text-lg">{variant.variantType}</h4>
+                                            <p className="text-sm text-gray-500 dark:text-gray-400">{variant.color}</p>
+                                          </div>
+                                          <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                                            variantStatus.type === 'error' ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300' :
+                                            variantStatus.type === 'warning' ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300' :
+                                            'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
+                                          }`}>
+                                            {totalQuantity} total
+                                          </span>
+                                        </div>
+                                        
+                                        {/* Size breakdown */}
+                                        <div className="space-y-2">
+                                          <p className="text-xs font-medium text-gray-600 dark:text-gray-400 uppercase tracking-wide">Size Breakdown</p>
+                                          <div className="flex flex-wrap gap-2">
+                                            {variant.sizes?.map((size, sizeIdx) => (
+                                              <div key={sizeIdx} className="flex items-center gap-1 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded-lg">
+                                                <span className="text-xs font-medium text-gray-700 dark:text-gray-300">{size.size}</span>
+                                                <span className={`text-xs font-bold ${
+                                                  Number(size.quantity) === 0 ? 'text-red-600 dark:text-red-400' :
+                                                  Number(size.quantity) <= (Number(size.reorderLevel) || 5) ? 'text-amber-600 dark:text-amber-400' :
+                                                  'text-green-600 dark:text-green-400'
+                                                }`}>
+                                                  ({size.quantity})
+                                                </span>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </motion.div>
+                            ))}
+
+                              {/* Pagination Controls */}
+                              {totalPages > 1 && (
+                                <div className="flex items-center justify-between pt-6 border-t border-gray-200 dark:border-gray-700">
+                                  <div className="text-sm text-gray-500 dark:text-gray-400">
+                                    Showing {startIndex + 1}-{Math.min(endIndex, filteredProducts.length)} of {filteredProducts.length.toLocaleString()} products
+                                  </div>
+                                  
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                                      disabled={currentPage === 1}
+                                      className="px-4 py-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-gray-700 dark:text-gray-300 rounded-xl font-medium transition-all duration-200"
+                                    >
+                                      Previous
+                                    </button>
+                                    
+                                    <div className="flex items-center gap-1">
+                                      {/* Show page numbers with ellipsis for large datasets */}
+                                      {(() => {
+                                        const pages = [];
+                                        const showEllipsis = totalPages > 7;
+                                        
+                                        if (!showEllipsis) {
+                                          // Show all pages if 7 or fewer
+                                          for (let i = 1; i <= totalPages; i++) {
+                                            pages.push(i);
+                                          }
+                                        } else {
+                                          // Show smart pagination with ellipsis
+                                          if (currentPage <= 4) {
+                                            pages.push(1, 2, 3, 4, 5, '...', totalPages);
+                                          } else if (currentPage >= totalPages - 3) {
+                                            pages.push(1, '...', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
+                                          } else {
+                                            pages.push(1, '...', currentPage - 1, currentPage, currentPage + 1, '...', totalPages);
+                                          }
+                                        }
+                                        
+                                        return pages.map((page, index) => (
+                                          page === '...' ? (
+                                            <span key={index} className="px-3 py-2 text-gray-400">...</span>
+                                          ) : (
+                                            <button
+                                              key={page}
+                                              onClick={() => setCurrentPage(page)}
+                                              className={`px-3 py-2 rounded-lg font-medium transition-all duration-200 ${
+                                                currentPage === page
+                                                  ? 'bg-indigo-500 text-white shadow-lg'
+                                                  : 'bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300'
+                                              }`}
+                                            >
+                                              {page}
+                                            </button>
+                                          )
+                                        ));
+                                      })()}
+                                    </div>
+                                    
+                                    <button
+                                      onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
+                                      disabled={currentPage === totalPages}
+                                      className="px-4 py-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-gray-700 dark:text-gray-300 rounded-xl font-medium transition-all duration-200"
+                                    >
+                                      Next
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })()}
                       </div>
                     </div>
                   </motion.div>
@@ -1040,53 +1427,99 @@ const Inventory = () => {
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-              <thead className="bg-gray-50 dark:bg-gray-700">
+          <div className="overflow-x-auto rounded-lg border border-border">
+            <table className="min-w-full">
+              <thead className="bg-gradient-to-r from-primary/5 to-primary/10 border-b border-border">
                 <tr>
-                  <th scope="col" className="px-6 py-3">Product</th>
-                  <th scope="col" className="px-6 py-3">Level</th>
-                  <th scope="col" className="px-6 py-3">Type</th>
-                  <th scope="col" className="px-6 py-3">Gender</th>
-                  <th scope="col" className="px-6 py-3">Creator</th>
-                  <th scope="col" className="px-6 py-3">Role</th>
-                  <th scope="col" className="px-6 py-3">Status</th>
-                  <th scope="col" className="px-6 py-3 text-right">Actions</th>
+                  {[
+                    { key: 'product', label: 'Product', align: 'left' },
+                    { key: 'level', label: 'Level', align: 'center' },
+                    { key: 'type', label: 'Type', align: 'center' },
+                    { key: 'gender', label: 'Gender', align: 'center' },
+                    { key: 'creator', label: 'Creator', align: 'center' },
+                    { key: 'role', label: 'Role', align: 'center' },
+                    { key: 'status', label: 'Status', align: 'center' },
+                    { key: 'actions', label: 'Actions', align: 'center' }
+                  ].map(({ key, label, align }) => (
+                    <th key={key} scope="col" className={`px-6 py-4 text-${align} text-sm font-bold text-foreground`}>
+                      <div className={`flex items-center gap-2 ${align === 'center' ? 'justify-center' : align === 'right' ? 'justify-end' : 'justify-start'}`}>
+                        <span>{label}</span>
+                      </div>
+                    </th>
+                  ))}
                 </tr>
               </thead>
-              <tbody>
-                {filteredProducts.map((product) => (
-                  <tr key={product.id} className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600/50">
+              <tbody className="bg-card">
+                {filteredProducts.map((product, index) => (
+                  <tr key={product.id} className={`${index % 2 === 0 ? 'bg-card' : 'bg-muted/20'} hover:bg-primary/5 transition-all duration-200 cursor-pointer border-b border-border/50 last:border-b-0`}>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-4">
                         <img 
                           src={getProductImage(product)} 
                           alt={product.name} 
-                          className="w-12 h-12 rounded-lg object-cover"
+                          className="w-12 h-12 rounded-lg object-cover border border-border shadow-sm"
                         />
                         <div>
-                          <div className="font-semibold text-gray-900 dark:text-gray-100">{product.name || 'N/A'}</div>
-                          <div className="text-sm text-gray-500 dark:text-gray-400">{product.school ? schoolsMap[product.school] : 'General'}</div>
+                          <div className="font-semibold text-foreground">{product.name || 'N/A'}</div>
+                          <div className="text-sm text-muted-foreground">{product.school ? schoolsMap[product.school] : 'General'}</div>
                         </div>
                       </div>
                     </td>
-                    <td className="px-6 py-4">{product.level || 'N/A'}</td>
-                    <td className="px-6 py-4">{product.type || 'N/A'}</td>
-                    <td className="px-6 py-4">{product.gender || 'N/A'}</td>
-                    <td className="px-6 py-4 font-medium text-gray-800 dark:text-gray-200">{product.creatorName || 'N/A'}</td>
-                    <td className="px-6 py-4 text-gray-500 dark:text-gray-400">{product.creatorRole || 'N/A'}</td>
-                    <td className="px-6 py-4">
-                      <Badge variant={calculateStockStatus(product.variants).type}>
+                    <td className="px-6 py-4 text-center">
+                      <span className="px-3 py-1 inline-flex text-xs font-bold rounded-full bg-gradient-to-r from-blue-500/10 to-blue-600/10 text-blue-600 border border-blue-200 dark:border-blue-800 capitalize">
+                        {product.level || 'N/A'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                      <span className="px-3 py-1 inline-flex text-xs font-bold rounded-full bg-gradient-to-r from-green-500/10 to-green-600/10 text-green-600 border border-green-200 dark:border-green-800 capitalize">
+                        {product.type || 'N/A'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                      <span className="px-3 py-1 inline-flex text-xs font-bold rounded-full bg-gradient-to-r from-purple-500/10 to-purple-600/10 text-purple-600 border border-purple-200 dark:border-purple-800 capitalize">
+                        {product.gender || 'N/A'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                      <div className="bg-muted/30 rounded-lg p-2 border border-border">
+                        <div className="text-sm font-medium text-foreground">{product.creatorName || 'N/A'}</div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                      <span className="px-2 py-1 text-xs font-medium text-muted-foreground bg-muted/50 rounded-full">
+                        {product.creatorRole || 'N/A'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                      <Badge variant={calculateStockStatus(product.variants).type} className="px-3 py-1 rounded-full font-bold">
                         {calculateStockStatus(product.variants).type.replace('_', ' ')}
                       </Badge>
                     </td>
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex items-center space-x-4">
-                        <button onClick={() => handleViewDetails(product)} className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-900 dark:hover:text-indigo-200"><Eye size={18} /></button>
+                    <td className="px-6 py-4 text-center">
+                      <div className="flex items-center justify-center gap-1">
+                        <button 
+                          onClick={() => handleViewDetails(product)} 
+                          className="p-2 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 hover:text-blue-700 transition-all duration-200 border border-blue-200"
+                          title="View Details"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
                         {isManager() && (
                           <>
-                            <button onClick={() => handleEdit(product)} className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"><Edit2 size={18} /></button>
-                            <button onClick={() => handleDelete(product)} className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-200"><Trash2 size={18} /></button>
+                            <button 
+                              onClick={() => handleReceive(product)} 
+                              className="p-2 rounded-lg bg-green-50 hover:bg-green-100 text-green-600 hover:text-green-700 transition-all duration-200 border border-green-200"
+                              title="Receive Stock"
+                            >
+                              <Plus className="w-4 h-4" />
+                            </button>
+                            <button 
+                              onClick={() => handleDelete(product)} 
+                              className="p-2 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 hover:text-red-700 transition-all duration-200 border border-red-200"
+                              title="Delete Product"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
                           </>
                         )}
                       </div>
@@ -1185,6 +1618,23 @@ const Inventory = () => {
           </div>
         </div>
       </Modal>
+
+      {/* Receive Stock Modal */}
+      {showReceiveModal && receiveModalData && (
+        <ReorderModal
+          isOpen={showReceiveModal}
+          onClose={() => {
+            setShowReceiveModal(false);
+            setReceiveModalData(null);
+          }}
+          variant={receiveModalData.variant}
+          size={receiveModalData.size}
+          currentStock={receiveModalData.currentStock}
+          reorderLevel={receiveModalData.reorderLevel}
+          batchId={receiveModalData.batchId}
+          product={receiveModalData.product}
+        />
+      )}
     </motion.div>
   );
 };

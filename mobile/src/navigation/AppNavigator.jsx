@@ -21,7 +21,7 @@ import SchoolScreen from '../screens/SchoolScreen';
 import SchoolDetailsScreen from '../screens/SchoolDetailsScreen';
 import StudentDetailsScreen from '../screens/StudentDetailsScreen';
 import ReportsScreen from '../screens/ReportsScreen';
-import SettingsScreen from '../screens/SettingsScreen';
+import NotificationScreen from '../screens/NotificationScreen';
 import AdminSuperAdminScreen from '../screens/AdminSuperAdminScreen';
 import ProfileSettingsScreen from '../screens/ProfileSettingsScreen';
 import PrivacySecurityScreen from '../screens/PrivacySecurityScreen';
@@ -125,11 +125,6 @@ function MainTabs() {
         component={ReportsScreen}
         options={{ title: 'Reports & Analytics', tabBarShowLabel: false }}
       />
-      <Tab.Screen 
-        name="Settings" 
-        component={SettingsScreen}
-        options={{ title: 'Settings', tabBarShowLabel: false }}
-      />
     </Tab.Navigator>
   );
 }
@@ -144,6 +139,7 @@ function MainNavigator() {
       <Stack.Screen name="CreateProduct" component={CreateProductScreen} />
       <Stack.Screen name="SchoolDetails" component={SchoolDetailsScreen} />
       <Stack.Screen name="StudentDetails" component={StudentDetailsScreen} />
+      <Stack.Screen name="Notifications" component={NotificationScreen} />
       <Stack.Screen name="AdminSuperAdmin" component={AdminSuperAdminScreen} />
       <Stack.Screen name="ProfileSettings" component={ProfileSettingsScreen} />
       <Stack.Screen name="PrivacySecurity" component={PrivacySecurityScreen} />

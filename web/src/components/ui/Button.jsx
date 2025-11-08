@@ -7,8 +7,11 @@ const Button = ({
   size = 'md', 
   className = '', 
   loading = false,
+  isLoading,
   ...props 
 }) => {
+  // Handle both loading and isLoading props for backward compatibility
+  const isButtonLoading = loading || isLoading;
   const baseStyles = 'inline-flex items-center justify-center font-medium rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-black';
   
   const variants = {
@@ -35,13 +38,13 @@ const Button = ({
         ${baseStyles} 
         ${variants[variant]} 
         ${sizes[size]}
-        ${loading ? 'opacity-75 cursor-not-allowed' : ''}
+        ${isButtonLoading ? 'opacity-75 cursor-not-allowed' : ''}
         ${className}
       `}
-      disabled={loading}
+      disabled={isButtonLoading}
       {...props}
     >
-      {loading ? (
+      {isButtonLoading ? (
         <motion.span
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -64,6 +67,7 @@ Button.propTypes = {
   size: PropTypes.oneOf(['sm', 'md', 'lg']),
   className: PropTypes.string,
   loading: PropTypes.bool,
+  isLoading: PropTypes.bool,
 };
 
 export default Button; 

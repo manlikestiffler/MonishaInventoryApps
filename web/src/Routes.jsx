@@ -27,7 +27,6 @@ import BatchDetails from './pages/BatchDetails';
 import EditBatch from './pages/EditBatch';
 import ErrorBoundary from './components/ErrorBoundary';
 import UpdateStudentUniformsPage from './pages/UpdateStudentUniformsPage';
-import ManageStudentUniforms from './pages/ManageStudentUniforms';
 import LogUniform from './pages/LogUniform';
 import DeficitReportPage from './pages/DeficitReportPage';
 
@@ -74,7 +73,6 @@ function Routes() {
           <Route path=":id" element={<NewSchoolDetails />} />
           <Route path=":schoolId/students/:studentId" element={<StudentDetailsPage />} />
           <Route path=":schoolId/students/:studentId/details" element={<StudentDetailsPage />} />
-          <Route path=":schoolId/students/:studentId/manage-uniforms" element={<ManageStudentUniforms />} />
         </Route>
         <Route path="batches" element={<BatchInventory />} />
         <Route path="batches/create" element={<CreateBatch />} />

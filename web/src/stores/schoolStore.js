@@ -1,19 +1,7 @@
 import { create } from 'zustand';
-import {
-  collection,
-  getDocs,
-  doc,
-  getDoc,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  arrayUnion,
-  arrayRemove,
-  serverTimestamp,
-  query,
-  where
-} from 'firebase/firestore';
+import { collection, getDocs, addDoc, deleteDoc, doc, updateDoc, query, orderBy, onSnapshot, serverTimestamp, getDoc, where } from 'firebase/firestore';
 import { db } from '../config/firebase';
+import useNotificationStore from './notificationStore';
 import { useAuthStore } from './authStore';
 
 const useSchoolStore = create((set, get) => ({
@@ -83,7 +71,7 @@ const useSchoolStore = create((set, get) => ({
     }
   },
 
-  addSchool: async (schoolData) => {
+  addSchool: async (schoolData, userInfo) => {
     set({ loading: true, error: null });
     try {
       const docRef = await addDoc(collection(db, 'schools'), {
@@ -107,6 +95,18 @@ const useSchoolStore = create((set, get) => ({
         schools: [...state.schools, newSchool],
         loading: false
       }));
+
+      // Create notification for school creation
+      const { addNotification } = useNotificationStore.getState();
+      await addNotification({
+        type: 'school_added',
+        title: 'New School Added',
+        message: `${schoolData.name} has been added to the system`,
+        category: 'administration',
+        priority: 'medium',
+        icon: '🏫'
+      }, userInfo);
+
       return newSchool;
     } catch (error) {
       console.error('Error adding school:', error);
@@ -155,14 +155,31 @@ const useSchoolStore = create((set, get) => ({
     }
   },
 
-  deleteSchool: async (id) => {
+  deleteSchool: async (id, userInfo) => {
     set({ loading: true, error: null });
     try {
+      // Get school name before deletion for notification
+      const { schools } = get();
+      const school = schools.find(s => s.id === id);
+      const schoolName = school?.name || 'Unknown School';
+      
       await deleteDoc(doc(db, 'schools', id));
+      
       set(state => ({
         schools: state.schools.filter(school => school.id !== id),
         loading: false
       }));
+
+      // Create notification for school deletion
+      const { addNotification } = useNotificationStore.getState();
+      await addNotification({
+        type: 'school_deleted',
+        title: 'School Deleted',
+        message: `School "${schoolName}" has been removed from the system`,
+        category: 'administration',
+        priority: 'medium',
+        icon: '🗑️'
+      }, userInfo);
     } catch (error) {
       console.error('Error deleting school:', error);
       set({ error: error.message, loading: false });

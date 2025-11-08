@@ -11,6 +11,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { getColors } from '../../constants/colors';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useSchoolStore } from '../../../configuration/schoolStore';
+import { useAuthStore } from '../../../configuration/authStore';
 import UniformDeficitReport from './UniformDeficitReport';
 import AddStudentModal from './AddStudentModal';
 
@@ -24,6 +25,7 @@ const StudentManagementSection = ({ school, students: studentsProp, navigation }
   const [addStudentModalVisible, setAddStudentModalVisible] = useState(false);
 
   const { getSchoolById, getSchoolUniformPolicies, deleteStudent } = useSchoolStore();
+  const { user } = useAuthStore();
 
   // Update students when prop changes (real-time updates from Firebase)
   useEffect(() => {
@@ -116,7 +118,13 @@ const StudentManagementSection = ({ school, students: studentsProp, navigation }
           onPress: async () => {
             try {
               console.log('Deleting student:', student.name, 'ID:', student.id);
-              await deleteStudent(school.id, student.id);
+              const userInfo = {
+                id: user?.uid,
+                name: user?.displayName,
+                fullName: user?.displayName,
+                email: user?.email
+              };
+              await deleteStudent(school.id, student.id, userInfo);
               console.log('Student deleted successfully');
               
               Alert.alert('Success', `${student.name} has been deleted`);

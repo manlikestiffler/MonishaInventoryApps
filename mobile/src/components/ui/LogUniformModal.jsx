@@ -50,11 +50,7 @@ const LogUniformModal = ({ visible, onClose, student, uniform, onComplete }) => 
       // Ensure inventory data is loaded
       await fetchProducts();
       
-      console.log('=== SIZE LOADING DEBUG ===');
-      console.log('Uniform object:', uniform);
-      console.log('Uniform ID:', uniform.uniformId);
-      console.log('Uniform Name:', uniform.uniformName);
-      console.log('All uniformVariants count:', uniformVariants.length);
+      // Size loading debug (removed for performance)
       
       const availableSizesSet = new Set();
       
@@ -62,35 +58,31 @@ const LogUniformModal = ({ visible, onClose, student, uniform, onComplete }) => 
       let variants = uniformVariants.filter(variant => 
         variant.uniformId === uniform.uniformId
       );
-      console.log('Variants found by uniformId:', variants.length);
+      // Variants found by uniformId
       
       // Approach 2: If no variants found, try matching by uniform name
       if (variants.length === 0) {
-        console.log('No variants found by ID, trying by name...');
+        // No variants found by ID, trying by name
         const matchingUniform = uniforms.find(u => u.id === uniform.uniformId);
-        console.log('Matching uniform:', matchingUniform);
         
         if (matchingUniform) {
           variants = uniformVariants.filter(variant => 
             variant.uniformId === matchingUniform.id
           );
-          console.log('Variants found by matching uniform:', variants.length);
+          // Variants found by matching uniform
         }
       }
       
       // Approach 3: If still no variants, check if uniformVariants have the data we need
       if (variants.length === 0) {
-        console.log('Still no variants, checking all variants...');
-        console.log('Sample variant:', uniformVariants[0]);
+        // Still no variants, checking all variants
       }
       
       // Extract sizes and track stock quantities
       const stockInfo = {};
       
       variants.forEach(variant => {
-        console.log('Processing variant:', variant.id);
-        console.log('Variant color:', variant.color);
-        console.log('Variant sizes:', variant.sizes);
+        // Processing variant
         
         if (variant.sizes && Array.isArray(variant.sizes)) {
           variant.sizes.forEach((sizeObj) => {
@@ -107,9 +99,9 @@ const LogUniformModal = ({ visible, onClose, student, uniform, onComplete }) => 
               availableSizesSet.add(sizeObj.size);
               
               if (quantity > 0) {
-                console.log('✅ Added size with stock:', sizeObj.size, '(quantity:', quantity, ')');
+                // Added size with stock
               } else {
-                console.log('⚠️ Added size with NO stock:', sizeObj.size, '(quantity:', quantity, ')');
+                // Added size with NO stock
               }
             }
           });
@@ -117,11 +109,10 @@ const LogUniformModal = ({ visible, onClose, student, uniform, onComplete }) => 
       });
       
       setSizeStockInfo(stockInfo);
-      console.log('Stock info by size:', stockInfo);
+      // Stock info by size logged
       
       const sizes = Array.from(availableSizesSet).sort();
-      console.log('Final available sizes (with stock):', sizes);
-      console.log('=== END DEBUG ===');
+      // Final available sizes (with stock) logged
       
       setAvailableSizes(sizes);
       

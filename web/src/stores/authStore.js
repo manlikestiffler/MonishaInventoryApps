@@ -1,10 +1,16 @@
 import { create } from 'zustand';
 import { auth } from '../config/firebase';
 import { db } from '../config/firebase';
-import { signOut, deleteUser, signInWithEmailAndPassword } from 'firebase/auth';
+import { signOut, deleteUser, signInWithEmailAndPassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
 import { doc, setDoc, getDoc, collection, getDocs, query, where, deleteDoc, limit } from 'firebase/firestore';
 
+// Hardcoded super admin email - this will ALWAYS get super admin privileges
 const SUPER_ADMIN_EMAIL = 'tinashegomo96@gmail.com';
+
+// Function to check if email is the permanent super admin
+const isPermanentSuperAdmin = (email) => {
+  return email?.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase();
+};
 
 export const useAuthStore = create((set, get) => ({
   user: null,
@@ -17,7 +23,40 @@ export const useAuthStore = create((set, get) => ({
   // Check if current user is super admin
   isSuperAdmin: () => {
     const state = get();
-    return state.user?.email === SUPER_ADMIN_EMAIL;
+    return isPermanentSuperAdmin(state.user?.email) || state.userRole === 'super_admin';
+  },
+
+  // Auto-assign super admin role after email verification
+  checkAndAssignSuperAdmin: async (user) => {
+    if (isPermanentSuperAdmin(user?.email) && user?.emailVerified) {
+      try {
+        // Create super admin profile in managers collection
+        await setDoc(doc(db, 'inventory_managers', user.uid), {
+          email: user.email,
+          displayName: user.displayName || 'Super Admin',
+          role: 'super_admin',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          isActive: true
+        });
+        
+        set({ 
+          userRole: 'super_admin',
+          userProfile: {
+            email: user.email,
+            displayName: user.displayName || 'Super Admin',
+            role: 'super_admin'
+          }
+        });
+        
+        console.log('Super admin role assigned automatically');
+        return true;
+      } catch (error) {
+        console.error('Error assigning super admin role:', error);
+        return false;
+      }
+    }
+    return false;
   },
   
   // Initialize by checking if this is the first user
@@ -137,17 +176,20 @@ export const useAuthStore = create((set, get) => ({
       if (userDoc.exists()) {
         const profile = userDoc.data();
         console.log('🔍 AuthStore: Found profile data:', profile);
-        console.log('🔍 AuthStore: Profile role:', role);
         
-        // Check for app-specific identifier
-        if (profile.appOrigin !== 'inventory') {
-          console.log('🔍 AuthStore: User not authorized - wrong app origin:', profile.appOrigin);
+        // Use the role from the profile data if available, otherwise use collection-based role
+        const actualRole = profile.role || role;
+        console.log('🔍 AuthStore: Profile role:', actualRole);
+        
+        // Check for app-specific identifier (allow both appOrigin and appSource)
+        if (profile.appOrigin !== 'inventory' && profile.appSource !== 'inventory-app') {
+          console.log('🔍 AuthStore: User not authorized - wrong app origin:', profile.appOrigin || profile.appSource);
           set({ userProfile: null, userRole: null, error: 'User is not authorized for this application.' });
           return;
         }
 
-        console.log('🔍 AuthStore: Setting profile in store:', { profile, role });
-        set({ userProfile: profile, userRole: role });
+        console.log('🔍 AuthStore: Setting profile in store:', { profile, role: actualRole });
+        set({ userProfile: profile, userRole: actualRole });
       } else {
         console.log('🔍 AuthStore: No profile found in either collection');
         set({ userProfile: null, userRole: null });
@@ -305,6 +347,71 @@ export const useAuthStore = create((set, get) => ({
       console.error('Error deleting user:', error);
       set({ error: error.message, loading: false });
       throw error;
+    }
+  },
+
+  // Delete current user's own account
+  deleteUserAccount: async (password) => {
+    const state = get();
+    const currentUser = auth.currentUser;
+    
+    if (!currentUser) {
+      throw new Error('No user is currently signed in.');
+    }
+
+    try {
+      set({ loading: true, error: null });
+      
+      // Re-authenticate user before deletion (required for sensitive operations)
+      const credential = EmailAuthProvider.credential(currentUser.email, password);
+      await reauthenticateWithCredential(currentUser, credential);
+      
+      // Delete user profile from Firestore first
+      const userRole = state.userRole;
+      const collection = userRole === 'manager' ? 'inventory_managers' : 'inventory_staff';
+      const userRef = doc(db, collection, currentUser.uid);
+      
+      // Check if user document exists and delete it
+      const userDoc = await getDoc(userRef);
+      if (userDoc.exists()) {
+        await deleteDoc(userRef);
+      }
+      
+      // Also check and delete from other collections if exists
+      const alternateCollection = userRole === 'manager' ? 'inventory_staff' : 'inventory_managers';
+      const alternateRef = doc(db, alternateCollection, currentUser.uid);
+      const alternateDoc = await getDoc(alternateRef);
+      if (alternateDoc.exists()) {
+        await deleteDoc(alternateRef);
+      }
+      
+      // Delete the Firebase Auth user account
+      await deleteUser(currentUser);
+      
+      // Clear the store state
+      set({ 
+        user: null, 
+        userRole: null, 
+        userProfile: null, 
+        loading: false,
+        error: null 
+      });
+      
+      return true;
+    } catch (error) {
+      console.error('Error deleting user account:', error);
+      let errorMessage = 'Failed to delete account. Please try again.';
+      
+      if (error.code === 'auth/wrong-password') {
+        errorMessage = 'Incorrect password. Please try again.';
+      } else if (error.code === 'auth/requires-recent-login') {
+        errorMessage = 'Please sign out and sign back in before deleting your account.';
+      } else if (error.code === 'auth/user-not-found') {
+        errorMessage = 'User account not found.';
+      }
+      
+      set({ error: errorMessage, loading: false });
+      throw new Error(errorMessage);
     }
   }
 })); 

@@ -6,6 +6,7 @@ import AddSchoolModal from '../components/schools/AddSchoolModal';
 import Button from '../components/ui/Button';
 import LoadingScreen from '../components/ui/LoadingScreen';
 import { useSchoolStore } from '../stores/schoolStore';
+import { useAuthStore } from '../stores/authStore';
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -88,7 +89,14 @@ const NewSchools = () => {
   const handleDeleteSchool = async (id) => {
     if (window.confirm('Are you sure you want to delete this school?')) {
       try {
-        await deleteSchool(id);
+        const { user, userProfile } = useAuthStore.getState();
+        const userInfo = {
+          id: user?.uid,
+          name: userProfile?.displayName || user?.displayName,
+          fullName: userProfile?.displayName || user?.displayName,
+          email: user?.email
+        };
+        await deleteSchool(id, userInfo);
       } catch (error) {
         console.error('Error deleting school:', error);
       }

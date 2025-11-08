@@ -16,6 +16,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { useAuthStore } from './authStore';
+import { useNotificationStore } from './notificationStore';
 
 const useSchoolStore = create((set, get) => ({
   schools: [],
@@ -108,7 +109,7 @@ const useSchoolStore = create((set, get) => ({
     }
   },
 
-  addSchool: async (schoolData) => {
+  addSchool: async (schoolData, userInfo) => {
     set({ loading: true, error: null });
     try {
       const docRef = await addDoc(collection(db, 'schools'), {
@@ -125,6 +126,12 @@ const useSchoolStore = create((set, get) => ({
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
+      
+      // Create notification with user info
+      if (userInfo) {
+        const notificationStore = useNotificationStore.getState();
+        notificationStore.createSchoolNotification(schoolData.name, userInfo);
+      }
       
       set(state => ({
         schools: [...state.schools, newSchool],
@@ -165,10 +172,28 @@ const useSchoolStore = create((set, get) => ({
     }
   },
 
-  deleteSchool: async (id) => {
+  deleteSchool: async (id, userInfo) => {
     set({ loading: true, error: null });
     try {
+      // Get school info before deletion for notification
+      const schoolDoc = await getDoc(doc(db, 'schools', id));
+      const schoolData = schoolDoc.exists() ? schoolDoc.data() : null;
+      
       await deleteDoc(doc(db, 'schools', id));
+      
+      // Create deletion notification with user info
+      if (schoolData && userInfo) {
+        const notificationStore = useNotificationStore.getState();
+        notificationStore.addNotification({
+          type: 'school_deleted',
+          title: 'School Deleted',
+          message: `School "${schoolData.name}" has been deleted`,
+          category: 'administration',
+          priority: 'medium',
+          icon: '🗑️'
+        }, userInfo);
+      }
+      
       set({ loading: false });
     } catch (error) {
       console.error('Error deleting school:', error);

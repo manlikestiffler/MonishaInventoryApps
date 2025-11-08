@@ -7,6 +7,7 @@ import Button from '../ui/Button';
 import { useInventoryStore } from '../../stores/inventoryStore';
 import { useSchoolStore } from '../../stores/schoolStore';
 import { useBatchStore } from '../../stores/batchStore';
+import { useAuthStore } from '../../stores/authStore';
 
 const BatchModal = ({ open, onClose, initialData = null, isGeneralBatch = false }) => {
   const { products, fetchProducts } = useInventoryStore();
@@ -101,7 +102,15 @@ const BatchModal = ({ open, onClose, initialData = null, isGeneralBatch = false 
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      await addBatch(formData);
+      const { user, userProfile } = useAuthStore.getState();
+      const userInfo = {
+        id: user?.uid,
+        name: userProfile?.displayName || user?.displayName,
+        fullName: userProfile?.displayName || user?.displayName,
+        email: user?.email
+      };
+      
+      await addBatch(formData, userInfo);
       onClose();
     } catch (error) {
       console.error('Error saving batch:', error);
